@@ -1,0 +1,6 @@
+(p-print "4")
+(p-print "\n")
+(p-print (p-format 3))
+(p-print "\n")
+(p-print (p-format '( p-print  ( p-format      "\t"))))
+(p-print "\n")

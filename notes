@@ -1,0 +1,12 @@
+dump host preprocessor with:
+gcc -dM -E - < /dev/null
+add to table:
+stdin, stderr, stdout, errno, environ
+printf and format sexp into str as primitives
+
+as root is a progn, (export sym1 sym2) as the last line is equal to
+'((mangle-inner (sym1 (eval (sym1))
+  (mangle-inner (sym2 (eval sym2))))
+and (import module.ss sym1) as filtering the export would work
+
+rewrite the macro interpreter to use a program counter for gotos

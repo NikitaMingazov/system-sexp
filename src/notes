@@ -1,0 +1,54 @@
+early return is set top of call stack to sexp and unwind once
+ctx has a count of required unmatched ) to
+
+eval doesn't require the fn to be an atom, only something that evaluates to a function
+so a fn literal works
+
+
+async:
+((do x)
+ (await a y)
+ (do z)
+ (do a))
+
+await sends "set a to y" to another thread, then sets a to (promise a)
+(do a) -> (do (promise y))
+but can't do promise y, need to wait for y
+block and give the runtime a hook for "queue this when a is written to"
+then the runtime requeues (do a)
+
+eval keeps an arg stack
+it gets new sexps from evaluated ones
+the dispatcher calls eval using the call stack as program counter
+
+send exec path to dispatcher N
+or send it to scheduler
+scheduler is implemented in userspace, it uses send to dispatcher N itself
+
+symboltable slices for the inherited symbols? (for coprocesses)
+
+interpreter forking:
+  compiler passes are built into the metaprogram
+  interpreter default is 0, eval
+  you can do 0, jit-static-fns, 1 eval so const functions
+   are visible everywhere, even before their definitions
+  create ctx, make thread for it and it starts executing
+  passing messages back to compiler, including errors,
+  so errors can be non-fatal if the parent chooses for it to be so
+  f
+
+rewrite interpreter in C++
+
+symbol overloading
+symboltable-overload (not primitive lol)
+creates a parallel symbol with a different type
+symboltable-peek can be wrapped to search for the correct type
+
+have them resolve to different functions for the input type?
+or have an impls table and have the function do i
+dispatch: if fn symbol len > 2, it is overloaded
+variadic ((impl X) ...) calls X on each?
+otherwise wrap the ... in (type)
+
+JIT can be done by (T (jiteval jitobj args))
+jai msg callbacks via (eval-hook fn hook)

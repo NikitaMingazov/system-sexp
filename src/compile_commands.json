@@ -1,0 +1,142 @@
+[
+  {
+    "file": "buffer.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "buffer.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "interpreter.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "interpreter.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "lps.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "lps.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "main.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "main.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "master_slave_channel.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "master_slave_channel.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "primitives.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "primitives.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "reader.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "reader.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "readtable.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "readtable.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "sexp.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "sexp.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "symboltable.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-o",
+      "ssi",
+      "symboltable.c",
+      "-g",
+      "-fshort-enums",
+      "-fno-strict-aliasing"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  }
+]

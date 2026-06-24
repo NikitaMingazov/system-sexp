@@ -1,0 +1,49 @@
+#include "readtable.h"
+#include "sexp.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+#{ $( ctt_include("hashmap.ct", $$) )$ }#
+
+size_t $( hash_trait("char") )$ (char c)
+	{ return c; }
+int $( eq_trait("char") )$ (char c, char o)
+	{ return c == o; }
+char* $( serialise_trait("char") )$ (char c)
+	{
+		char *s = malloc(2);
+		*s = c;
+		*s = '\0';
+		return s;
+	}
+char* $( serialise_trait("reader_macro") )$ (reader_macro m)
+	{ return "unimplemented"; }
+$( hm_template("char", "reader_macro") )$
+
+typedef struct readtable {
+	$( hm("char", "reader_macro") )$ *table;
+} Readtable;
+
+Readtable *readtable_new() {
+	Readtable *new = malloc(sizeof(*new));
+	new->table = $( hm_new("char", "reader_macro") )$();
+	return new;
+}
+void readtable_free(Readtable *rt) {
+	return $( hm_free("char", "reader_macro") )$ (rt->table);
+}
+
+// struct reader_macro {
+// 	Sexp *fn;
+// 	char c;
+// };
+// the sexp is interpreted
+
+reader_macro *readtable_get_macro(const Readtable *rt, char c) {
+	return $( hm_get("char", "reader_macro") )$ (rt->table, c);
+}
+void readtable_add_macro(Readtable *rt, char c, reader_macro macro) {
+	return $( hm_insert("char", "reader_macro") )$ (rt->table, c, macro);
+}
+// Sexp (*readtable_get_macro(const Readtable *rt, char c))(FILE*, char);
+// void readtable_add_macro(Readtable *rt, Sexp (*macro)(FILE*, char), char c);
