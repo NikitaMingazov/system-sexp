@@ -32,7 +32,7 @@ void primitives_unset_macro(Primitives *prims, const lps fn);
 // Bd := Bdouble  TODO: Bf
 
 #define DEF_PRIM(prim_name) \
-Sexp prim_name(size_t argc, Sexp *argv, Interpreter *I, CallInst at);
+Sexp prim_name(size_t argc, Sexp *argv, Interpreter *I, CallTree *at);
 
 // lisp semantics
 // () -> S

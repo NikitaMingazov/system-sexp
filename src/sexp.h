@@ -16,19 +16,22 @@ typedef uint8_t u8;
 enum atom_type {
 	// Used to represent an invalid sexp (on 0-init)
 	A_NULL = 0,
+	// a symbol is a string tagged by the reader
+	A_SYM  = 1,
 	// lps
-	A_STR  = 1,
+	A_STR  = 2,
 	// uintptr_t
-	A_UVAL = 2,
+	A_UVAL = 3,
 	// intptr_t
-	A_SVAL = 3,
+	A_SVAL = 4,
 	// double
-	A_FVAL = 4,
+	A_FVAL = 5,
 	// void*
-	A_PTR  = 5,
+	A_PTR  = 6,
 };
+#define LIST_T 7
 
-typedef union atom_val {
+union atom_val {
 	// by default atoms are strings
 	lps as_str;
 	// but they might also be used as values
@@ -37,12 +40,7 @@ typedef union atom_val {
 	double fval;
 	// or a memory address
 	void *as_ptr;
-} AtomVal;
-
-typedef struct atom {
-	AtomVal val;
-	enum atom_type type;
-} Atom;
+};
 
 struct sexp;
 typedef struct list {
@@ -50,28 +48,52 @@ typedef struct list {
 	u16 num_children;
 } List;
 
-union sexp_data {
-	Atom atom;
-	List list;
+union qword_data {
+	union atom_val atom;
+	struct sexp *children;
+};
+
+union word_data {
+	u8 atom_type;
+	u16 num_children;
 };
 
 typedef struct sexp {
-	union sexp_data val;
+	union qword_data qword;
+	union word_data word;
 	u16 row;
 	u16 col;
-	bool is_list;
+	u8 is_list;
+	// u8 flags; // 1: is_list
 } Sexp;
 
 // for the reader
 Sexp sexp_new_source_atom(lps str, u16 row, u16 col);
 Sexp sexp_new_source_list(u16 row, u16 col);
-// uses the ctx global for row/col (for primitive macros)
-Sexp sexp_new_list(CallInst at);
-Sexp sexp_new_atom_str(lps str, CallInst at);
-Sexp sexp_new_atom_ptr(void *ptr, CallInst at);
-Sexp sexp_new_atom_int(intptr_t value, CallInst at);
-Sexp sexp_new_atom_uint(uintptr_t value, CallInst at);
-Sexp sexp_new_atom_float(double value, CallInst at);
+// used in primitive macros TODO: move out of sexp
+Sexp sexp_new_list(CallTree *at);
+Sexp sexp_new_atom_str(lps str, CallTree *at);
+Sexp sexp_new_atom_ptr(void *ptr, CallTree *at);
+Sexp sexp_new_atom_int(intptr_t value, CallTree *at);
+Sexp sexp_new_atom_uint(uintptr_t value, CallTree *at);
+Sexp sexp_new_atom_float(double value, CallTree *at);
+
+// because of the nasty structure for alignment, these methods
+//  provide a stable and ergonomic interface
+bool sexp_is_list(Sexp s);
+// atom reads
+enum atom_type sexp_atom_type(Sexp s);
+uintptr_t sexp_read_u64(Sexp s);
+intptr_t sexp_read_s64(Sexp s);
+double sexp_read_f64(Sexp s);
+void* sexp_read_ptr(Sexp s);
+lps sexp_read_str(Sexp s);
+// list_reads
+Sexp* sexp_children(Sexp s);
+size_t sexp_num_children(Sexp s);
+void sexp_list_append(Sexp *list, Sexp addition);
+
+bool sexp_is_nil(Sexp s);
 
 lps sexp_format(Sexp sexp);
 
@@ -80,9 +102,6 @@ Sexp sexp_dup(Sexp sexp);
 // deep free of a sexp's arrays
 // does not free the ptr atoms
 void sexp_free(Sexp sexp);
-
-void sexp_list_append(Sexp *list, Sexp addition);
-bool sexp_is_nil(Sexp s);
 
 // a zeroed sexp to represent internal errors/end of stream/etc.
 Sexp sexp_null();

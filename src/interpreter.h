@@ -29,15 +29,23 @@ void stackstate_destroy(StackState ss);
 
 // inverted tree, you go up from the leafs to the root
 typedef struct call_tree {
-	struct call_tree *parent;
 	StackState state;
+	struct call_tree *parent;
+	// the entry in call_results the result will be sent to when popped
+	uint origin_idx;
 } CallTree;
 
-CallTree calltree_new(CallTree *parent, uint call_idx);
+CallTree calltree_new(CallTree *parent, Sexp *to_eval, uint call_idx);
 void calltree_destroy(CallTree ct);
 
+CallTree *calltree_child_at(CallTree *parent, Sexp *to_eval, size_t branch_idx);
+
+// a callinst is a job given to the scheduler
+// they are treated as a progn, evaluated in sequence and the last result is
+// stored in the call_results of the node at call_idx
 typedef struct call_instance {
 	CallTree *node;
+	// progress within the job
 	uint call_idx;
 } CallInst;
 

@@ -2,35 +2,69 @@
 #include "buffer.h"
 #include "interpreter.h"
 #include "lps.h"
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-static Sexp atom_new(AtomVal inner, enum atom_type type, u16 row, u16 col) {
+static Sexp atom_new(union atom_val inner, enum atom_type type, u16 row, u16 col) {
 	return (Sexp) {
-		.val.atom.val = inner,
-		.val.atom.type = type,
-		.is_list = false,
+		.qword.atom = inner,
+		.word.atom_type = type,
 		.row = row,
 		.col = col,
+		.is_list = false,
 	};
 }
 
 static Sexp sexp_new_list_at(u16 row, u16 col) {
-	union sexp_data inner = (union sexp_data) (List) {
-		.children = NULL,
-		.num_children = 0,
-	};
 	return (Sexp) {
-		.val = inner,
-		.is_list = true,
+		.qword.children = NULL,
+		.word.num_children = 0,
 		.row = row,
 		.col = col,
+		.is_list = true,
 	};
 }
 
+// atom reads
+enum atom_type sexp_atom_type(Sexp s) {
+	assert(!s.is_list);
+	return s.word.atom_type;
+}
+uintptr_t sexp_read_u64(Sexp s) {
+	// assert(sexp_atom_type(s) == A_UVAL);
+	return s.qword.atom.uval;
+}
+intptr_t sexp_read_s64(Sexp s) {
+	// assert(sexp_atom_type(s) == A_SVAL);
+	return s.qword.atom.sval;
+}
+
+double sexp_read_f64(Sexp s) {
+	assert(sexp_atom_type(s) == A_FVAL);
+	return s.qword.atom.fval;
+}
+void* sexp_read_ptr(Sexp s) {
+	assert(sexp_atom_type(s) == A_PTR);
+	return s.qword.atom.as_ptr;
+}
+lps sexp_read_str(Sexp s) {
+	assert(sexp_atom_type(s) == A_STR || sexp_atom_type(s) == A_SYM);
+	return s.qword.atom.as_str;
+}
+// list_reads
+Sexp* sexp_children(Sexp s) {
+	assert(s.is_list);
+	return s.qword.children;
+}
+size_t sexp_num_children(Sexp s) {
+	assert(s.is_list);
+	return s.word.num_children;
+}
+
 Sexp sexp_new_source_atom(lps val, u16 row, u16 col) {
-	return atom_new((AtomVal) val, A_STR, row, col);
+	return atom_new((union atom_val) val, A_SYM, row, col);
 }
 
 Sexp sexp_new_source_list(u16 row, u16 col) {
@@ -38,10 +72,10 @@ Sexp sexp_new_source_list(u16 row, u16 col) {
 }
 
 #define SEXP_ATOM_BUILDER(FSUFFIX, TYPE, DISCRIMINANT) \
-Sexp sexp_new_atom_##FSUFFIX(TYPE value, CallInst at) { \
-	u16 row = callinst_row_at_call(at); \
-	u16 col = callinst_col_at_call(at); \
-	return atom_new((AtomVal)value, DISCRIMINANT, row, col); \
+Sexp sexp_new_atom_##FSUFFIX(TYPE value, CallTree *at) { \
+	u16 row = at->state.sexp_called[0].row; \
+	u16 col = at->state.sexp_called[0].col; \
+	return atom_new((union atom_val)value, DISCRIMINANT, row, col); \
 }
 
 SEXP_ATOM_BUILDER(str, lps, A_STR)
@@ -50,25 +84,27 @@ SEXP_ATOM_BUILDER(uint, uintptr_t, A_UVAL)
 SEXP_ATOM_BUILDER(int, intptr_t, A_SVAL)
 SEXP_ATOM_BUILDER(float, double, A_FVAL)
 
-Sexp sexp_new_list(CallInst at) {
-	u16 row = callinst_row_at_call(at); \
-	u16 col = callinst_col_at_call(at); \
+Sexp sexp_new_list(CallTree *at) {
+	u16 row = at->state.sexp_called[0].row;
+	u16 col = at->state.sexp_called[0].col;
 	return sexp_new_list_at(row, col);
 }
 
 void sexp_list_append(Sexp *target_list, Sexp addition) {
-	List *list = &target_list->val.list;
-	list->num_children++;
-	list->children = realloc(list->children, sizeof(*list->children) * list->num_children);
-	list->children[list->num_children-1] = addition;
+	Sexp *children = sexp_children(*target_list);
+	target_list->word.num_children++;
+	size_t num_children = sexp_num_children(*target_list);
+	children = realloc(children, sizeof(*children) * num_children);
+	children[num_children-1] = addition;
+	target_list->qword.children = children;
 }
 
 Sexp sexp_dup(Sexp sexp) {
 	Sexp dup;
 	memcpy(&dup, &sexp, sizeof(dup));
 	if (sexp.is_list) {
-		for (size_t i = 0; i < dup.val.list.num_children; ++i) {
-			dup.val.list.children[i] = sexp_dup(sexp.val.list.children[i]);
+		for (size_t i = 0; i < sexp_num_children(sexp); ++i) {
+			dup.qword.children[i] = sexp_dup(sexp_children(sexp)[i]);
 		}
 	}
 	return dup;
@@ -76,18 +112,18 @@ Sexp sexp_dup(Sexp sexp) {
 
 void sexp_free(Sexp sexp) {
 	if (sexp.is_list) {
-		for (size_t i = 0; i < sexp.val.list.num_children; ++i) {
-			sexp_free(sexp.val.list.children[i]);
+		for (size_t i = 0; i < sexp_num_children(sexp); ++i) {
+			sexp_free(sexp_children(sexp)[i]);
 		}
-		free(sexp.val.list.children);
+		free(sexp_children(sexp));
 	} else {
-		if (sexp.val.atom.type == A_STR)
-			lps_free(sexp.val.atom.val.as_str);
+		if (sexp_atom_type(sexp) == A_STR)
+			lps_free(sexp.qword.atom.as_str);
 	}
 }
 
 bool sexp_is_nil(Sexp s) {
-	return s.is_list && s.val.list.num_children == 0;
+	return s.is_list && sexp_num_children(s) == 0;
 }
 
 Sexp sexp_null() {
@@ -114,39 +150,39 @@ static char *format(const char *fmt, size_t *len, ...) {
 	return buffer;
 }
 
-void sexp_format_into_buffer(const Sexp sexp, Buffer *buf) {
-	if (sexp.is_list) {
-		List as_list = sexp.val.list;
+void sexp_format_into_buffer(const Sexp s, Buffer *buf) {
+	if (s.is_list) {
 		buffer_append_char(buf, '(');
-		for (size_t i = 0; i < as_list.num_children; ++i) {
-			sexp_format_into_buffer(as_list.children[i], buf);
+		for (size_t i = 0; i < sexp_num_children(s); ++i) {
+			sexp_format_into_buffer(sexp_children(s)[i], buf);
+			if (i+1 < sexp_num_children(s))
+				buffer_append_char(buf, ' ');
 		}
 		buffer_append_char(buf, ')');
 	} else {
-		Atom as_atom = sexp.val.atom;
 		char *tmp = NULL;
 		size_t len;
-		switch (as_atom.type) {
-		case A_STR: {
-			buffer_append_chars(buf, as_atom.val.as_str, lps_len(as_atom.val.as_str));
+		switch (sexp_atom_type(s)) {
+		case A_STR: case A_SYM: {
+			buffer_append_chars(buf, sexp_read_str(s), lps_len(sexp_read_str(s)));
 		} break;
 		case A_UVAL: {
-			tmp = format("%ul", &len, as_atom.val.uval);
+			tmp = format("%lu", &len, sexp_read_u64(s));
 			buffer_append_chars(buf, tmp, len);
 			free(tmp);
 		} break;
 		case A_SVAL: {
-			tmp = format("%l", &len, as_atom.val.sval);
+			tmp = format("%ld", &len, sexp_read_s64(s));
 			buffer_append_chars(buf, tmp, len);
 			free(tmp);
 		} break;
 		case A_FVAL: {
-			tmp = format("%f", &len, as_atom.val.fval);
+			tmp = format("%f", &len, sexp_read_f64(s));
 			buffer_append_chars(buf, tmp, len);
 			free(tmp);
 		} break;
 		case A_PTR: {
-			tmp = format("%p", &len, as_atom.val.as_ptr);
+			tmp = format("%p", &len, sexp_read_ptr(s));
 			buffer_append_chars(buf, tmp, len);
 			free(tmp);
 		} break;

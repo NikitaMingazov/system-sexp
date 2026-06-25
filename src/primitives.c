@@ -10,6 +10,8 @@
 #include "readtable.h"
 #include "lps.h"
 #include "sexp.h"
+#include <setjmp.h>
+#include <threads.h>
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -20,7 +22,7 @@
 #include <errno.h>
 #include <alloca.h>
 
-size_t lps_hasheq(Ht_Op op, void const* a_, void const* b_, size_t n)
+static size_t lps_hasheq(Ht_Op op, void const* a_, void const* b_, size_t n)
 {
 	const lps *a = a_;
 	const lps *b = b_;
@@ -32,7 +34,7 @@ size_t lps_hasheq(Ht_Op op, void const* a_, void const* b_, size_t n)
 	return 0;
 }
 
-size_t char_hasheq(Ht_Op op, void const* a_, void const* b_, size_t n)
+static size_t char_hasheq(Ht_Op op, void const* a_, void const* b_, size_t n)
 {
 	const char *a = a_;
 	const char *b = b_;
@@ -95,7 +97,7 @@ void primitives_unset_reader(Primitives *prims, char c) {
 
 Sexp quote_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 	Sexp quoted = sexp_new_source_list(row, col);
-	Sexp quote = sexp_new_source_atom(lps_from_cstr("quote"), row, col);
+	Sexp quote = sexp_new_source_atom(lps_from_cstr("p-quote"), row, col);
 	sexp_list_append(&quoted, quote);
 	sexp_list_append(&quoted, read(I));
 	return quoted;
@@ -157,9 +159,9 @@ Sexp str_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 		}
 	}
 	lps str = lps_from_cstr(buffer_to_cstr_move(string_builder));
-	// sexp_list_append(&strlit, sexp_new_source_atom(str, row, col));
-	// return strlit;
-	return sexp_new_source_atom(str, row, col);
+	Sexp result = sexp_new_source_atom(str, row, col);
+	result.word.atom_type = A_STR;
+	return result;
 }
 
 // reader macro primitives:
@@ -189,8 +191,8 @@ Sexp numeral_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 				long long val = strtoll(string_builder->data, NULL, 10);
 				if (errno != ERANGE) {
 					Sexp ilit = sexp_new_source_atom(NULL, row, col);
-					ilit.val.atom.type = A_SVAL;
-					ilit.val.atom.val.sval = val;
+					ilit.word.atom_type = A_SVAL;
+					ilit.qword.atom.sval = val;
 					return ilit;
 				} else {
 					fprintf(stderr, "integer literal cannot be converted to a long long\n");
@@ -219,8 +221,8 @@ Sexp numeral_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 				double val = strtod(string_builder->data, NULL);
 				if (errno != ERANGE) {
 					Sexp flit = sexp_new_source_atom(NULL, row, col);
-					flit.val.atom.type = A_FVAL;
-					flit.val.atom.val.fval = val;
+					flit.word.atom_type = A_FVAL;
+					flit.qword.atom.fval = val;
 					return flit;
 				} else {
 					fprintf(stderr, "float literal cannot be converted to a double\n");
@@ -261,7 +263,19 @@ void primitive_reader_macros(Primitives *prims) {
 	primitives_set_reader(prims, '9', numeral_reader_macro);
 }
 
-Sexp p_read(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+extern thread_local jmp_buf unwind_point;
+
+// evaluate the given argument into the symbol
+#define EVAL(symbol, argi) \
+	Sexp symbol; \
+	if (!sexp_is_null(at->state.call_results[argi+1])) { \
+		symbol = at->state.call_results[argi+1]; \
+	} else { \
+		CallInst child = (CallInst) { .node = at, .call_idx = argi+1 }; \
+		symbol = eval(argv[argi], I, child); \
+	} \
+
+Sexp p_read(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 0);
 	Sexp s = read(I);
 	if (sexp_is_null(s)) {
@@ -276,31 +290,43 @@ Sexp p_read(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
 }
 
 // this exists to move the lifetime of a sexp to that of its parent
-// otherwise it is freed when the macro ends
+// otherwise it is freed when the macro ends, but this uses malloc
 // S -> S
-Sexp p_quote(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_quote(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
 	return sexp_dup(argv[0]);
 }
 
 // the primitive form of eval
-Sexp p_exec(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+// S -> S
+Sexp p_exec(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	if (!argv[0].is_list)
-		return argv[0];
-	List to_exec = argv[0].val.list;
-	assert(to_exec.num_children > 0);
-	assert(! to_exec.children[0].is_list);
-	Atom macro_sym = to_exec.children[0].val.atom;
-	assert(macro_sym.type == A_STR);
-	lps macro_str = macro_sym.val.as_str;
+	if (!argv[0].is_list) {
+		switch (sexp_atom_type(argv[0])) {
+		case A_SYM: {
+			if (!calltree_get_symbol_val_ref(at, sexp_read_str(argv[0]))) {
+				fprintf(stderr, "p-exec: could not find symbol "LPS_Fmt"\n", LPS_Arg(sexp_read_str(argv[0])));
+				abort();
+			}
+			return *calltree_get_symbol_val_ref(at, sexp_read_str(argv[0]));
+		} break;
+		default: {
+			return argv[0];
+		} break;
+		}
+	}
+	Sexp *children = sexp_children(argv[0]);
+	size_t num_children = sexp_num_children(argv[0]);
+	// (eval ()) panics
+	assert(num_children > 0);
+	lps macro_str = sexp_read_str(children[0]);
 	Sexp result;
-	size_t child_argc = to_exec.num_children-1;
-	Sexp *child_argv = child_argc > 0 ? &to_exec.children[1] : NULL;
+	size_t child_argc = num_children-1;
+	Sexp *child_argv = child_argc > 0 ? &children[1] : NULL;
 	if (primitives_contains_macro(I->prims, macro_str)) {
-		result = primitives_get_macro
-		            (I->prims, macro_str)
-		            (child_argc, child_argv, I, at);
+		return primitives_get_macro
+		         (I->prims, macro_str)
+		         (child_argc, child_argv, I, at);
 	} else {
 		// (p-st-push name
 		//   (()
@@ -308,127 +334,103 @@ Sexp p_exec(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
 		//     (S0 (\ p-st-peek argc_bind))
 		//     (S1 (\ p-st-peek argv_bind)))))
 		// the body is interpreted as a progn
-unwrapping_symbols:
-		// (() name) is a macro alias in the symboltable
-		Sexp *st_entry = calltree_get_symbol_val_ref(at.node, macro_str);
-		assert(st_entry);
-		assert(st_entry->is_list);
-		assert(st_entry->val.list.num_children == 2);
-		assert(sexp_is_nil(st_entry->val.list.children[0]));
-		if (! st_entry->val.list.children[1].is_list) {
-			// symbol was an alias of a macro
-			assert(st_entry->val.list.children[1].val.atom.type == A_STR);
-			macro_str = st_entry->val.list.children[1].val.atom.val.as_str;
+		// unwrapping symbol
+		// (() name) defines a macro in the symboltable
+		Sexp *st_entry = calltree_get_symbol_val_ref(at, macro_str);
+		if (!st_entry) {
+			fprintf(stderr, "p-exec: could not find symbol "LPS_Fmt"\n", LPS_Arg(macro_str));
+			abort();
+		}
+		Sexp *st_children = sexp_children(*st_entry);
+		assert(sexp_num_children(*st_entry) == 2);
+		if (!sexp_is_nil(st_children[0])) {
+			fprintf(stderr, "p-exec: symbol "LPS_Fmt" is not a macro\n", LPS_Arg(macro_str));
+			abort();
+		}
+		Sexp macro_to_execute = sexp_children(*st_entry)[1];
+		if (!macro_to_execute.is_list) {
+			// symbol is an alias of a macro, call if intrinsic, panic otherwise
+			macro_str = sexp_read_str(macro_to_execute);
 			if (primitives_contains_macro(I->prims, macro_str)) {
-				result = primitives_get_macro
-		            		(I->prims, macro_str)
-		            		(child_argc, child_argv, I, at);
-				goto done;
+				return primitives_get_macro
+					     (I->prims, macro_str)
+					     (child_argc, child_argv, I, at);
 			} else {
-				goto unwrapping_symbols;
+				abort();
 			}
 		}
-		List child_macro_list = st_entry->val.list.children[1].val.list;
-		assert(child_macro_list.num_children > 0);
-		assert(child_macro_list.children[0].is_list);
-		List arg_binds = child_macro_list.children[0].val.list;
-		assert(arg_binds.num_children == 2);
-		assert(!arg_binds.children[0].is_list);
-		assert(arg_binds.children[0].val.atom.type == A_STR);
-		assert(!arg_binds.children[1].is_list);
-		assert(arg_binds.children[1].val.atom.type == A_STR);
-		lps argc_bind = arg_binds.children[0].val.atom.val.as_str;
-		Sexp argc_node = sexp_new_atom_uint(0, at);
-		argc_node.val.atom.val.uval = child_argc;
-		lps argv_bind = arg_binds.children[1].val.atom.val.as_str;
-		Sexp argv_node = sexp_new_atom_ptr(NULL, at);
-		argc_node.val.atom.val.as_ptr = child_argv;
-		// these Sexp* can be accessed via alloca and memcpy
-		calltree_set_symbol_val(at.node, argc_bind, argc_node);
-		calltree_set_symbol_val(at.node, argv_bind, argv_node);
-		for (size_t i = 0; i+1 < child_macro_list.num_children; ++i) {
-			Sexp cur_sexp = child_macro_list.children[i];
-			assert(cur_sexp.is_list);
-			assert(cur_sexp.val.list.num_children > 0);
-			assert(! cur_sexp.val.list.children[0].is_list);
-			List cur_list = cur_sexp.val.list;
-			size_t child_argc = cur_list.num_children-1;
-			Sexp *child_argv = child_argc > 0 ? &cur_list.children[1] : NULL;
-			if (i+2 < st_entry->val.list.num_children)
-				p_exec(argc, argv, I, at);
-			else
-				result = p_exec(argc, argv, I, at);
-		}
-		calltree_remove_symbol_val(at.node, argc_bind);
-		calltree_remove_symbol_val(at.node, argv_bind);
+		assert(sexp_num_children(macro_to_execute) > 0);
+		Sexp arg_binds = sexp_children(macro_to_execute)[0];
+		assert(arg_binds.is_list);
+		assert(sexp_num_children(arg_binds) == 2);
+		CallTree *child_tree = calltree_child_at(at, &macro_to_execute, at->origin_idx);
+		// CallInst interpreted_call = callinst_virtual_child_of(at, &macro_to_execute);
+		// skip over the arg bindings
+		CallInst interpreted_call = (CallInst) { .node = child_tree, .call_idx = 1 };
+		Sexp argc_node = sexp_new_atom_uint(child_argc, at);
+		lps argc_bind_to = sexp_read_str(sexp_children(arg_binds)[0]);
+		Sexp argv_node = sexp_new_atom_ptr(child_argv, at);
+		lps argv_bind_to = sexp_read_str(sexp_children(arg_binds)[1]);
+		calltree_set_symbol_val(interpreted_call.node, argc_bind_to, argc_node);
+		calltree_set_symbol_val(interpreted_call.node, argv_bind_to, argv_node);
+		interpreter_push_callinst(I, interpreted_call, 0);
+		// the dispatcher will step through, insert the result and call this again
+		longjmp(unwind_point, 1);
 	}
-done:
-	return result;
 }
 
-Sexp p_is_primitive(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
-	assert(argc == 1);
-	assert(! argv[0].is_list);
-	assert(argv[0].val.atom.type == A_STR);
-	bool result_v = primitives_contains_macro(I->prims, argv[0].val.atom.val.as_str);
-	Sexp result = sexp_new_atom_uint(0, at);
-	result.val.atom.val.uval = result_v;
-	return result;
+Sexp p_is_primitive(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
+	EVAL(a, 0)
+	bool result_v = primitives_contains_macro(I->prims, sexp_read_str(a));
+	return sexp_new_atom_int(result_v, at);
 }
 
-Sexp p_symboltable_push(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_symboltable_push(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 2);
-	assert(! argv[0].is_list);
-	assert(argv[0].val.atom.type == A_STR);
+	EVAL(val, 1)
 	int err = calltree_set_symbol_val(
-                                      at.node,
-                                      argv[0].val.atom.val.as_str,
-                                      argv[1]
+                                      at->parent,
+                                      sexp_read_str(argv[0]),
+                                      val
 	                                 );
 	assert(!err);
 	return sexp_new_list(at);
 }
 // str -> S
-Sexp p_symboltable_pop(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_symboltable_pop(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	assert(!argv[0].is_list);
-	assert(argv[0].val.atom.type == A_STR);
-	return calltree_remove_symbol_val(at.node, argv[0].val.atom.val.as_str);
+	return calltree_remove_symbol_val(at->parent, sexp_read_str(argv[0]));
 }
 // str -> S*
-Sexp p_symboltable_peek(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_symboltable_peek(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	assert(!argv[0].is_list);
-	assert(argv[0].val.atom.type == A_STR);
-	Sexp ptr = sexp_new_atom_ptr(NULL, at);
-	ptr.val.atom.val.as_ptr = calltree_get_symbol_val_ref(at.node, argv[0].val.atom.val.as_str);
-	return ptr;
+	return sexp_new_atom_ptr(calltree_get_symbol_val_ref(at, sexp_read_str(argv[0])), at);
 }
 
-Sexp p_path_at(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_path_at(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 0);
-	CallInst *heaped = malloc(sizeof(CallInst));
+	CallInst *heaped = calltree_alloc(at, sizeof(CallInst));
 	memcpy(heaped, &at, sizeof(CallInst));
 	return sexp_new_atom_ptr(heaped, at);
 }
 
 // str -> ()
-Sexp p_print(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_print(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	Sexp post = eval(argv[0], I, at);
-	fprintf(stdout, ""LPS_Fmt"", LPS_Arg(post.val.atom.val.as_str));
+	EVAL(post, 0)
+	fprintf(stdout, ""LPS_Fmt"", LPS_Arg(sexp_read_str(post)));
 	return sexp_new_list(at);
 }
 
 // S -> str
-Sexp p_format(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_format(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	Sexp a = eval(argv[0], I, at);
+	EVAL(a, 0)
 	return sexp_new_atom_str(sexp_format(a), at);
 }
 
 // S -> ()
-Sexp p_sendmsg(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_sendmsg(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
 	Sexp *msg = malloc(sizeof(Sexp));
 	memcpy(msg, argv, sizeof(Sexp));
@@ -436,7 +438,7 @@ Sexp p_sendmsg(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
 	return sexp_new_list(at);
 }
 // () -> S
-Sexp p_awaitmsg(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_awaitmsg(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 0);
 	Sexp msg;
 	Sexp *in = slave_await_msg(I->parent_channel);
@@ -445,49 +447,54 @@ Sexp p_awaitmsg(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
 	return msg;
 }
 
+// Sexp API ===============================================
+
+// returns the Sexp node type
+// S -> Bu
+Sexp p_typeof(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
+	assert(argc == 1);
+	if (argv[0].is_list)
+		return sexp_new_atom_uint(LIST_T, at);
+	return sexp_new_atom_uint(sexp_atom_type(argv[0]), at);
+}
+
 // Sexp memory primitives
 // S -> S*
-Sexp p_adrof(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_adrof(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
 	return sexp_new_atom_ptr(&argv[0], at);
 }
 // S* -> S
-Sexp p_deref(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+// TODO: possible remove this, replace with alloca+memcpy in ss
+Sexp p_deref(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	return * (Sexp*) argv[0].val.atom.val.as_ptr;
+	return * (Sexp*) sexp_read_ptr(argv[0]);
 }
 // () -> size_t
-Sexp p_sexp_size(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_sexp_size(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 0);
 	return sexp_new_atom_uint(sizeof(Sexp), at);;
 }
 
-// string API (the other methods are reducible with memcpy)
+// string API ==============================================
+// (the other methods are reducible with memcpy)
 // str -> size_t
-Sexp p_strlen(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_strlen(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	assert(! argv[0].is_list);
-	assert(argv[0].val.atom.type == A_STR);
-	size_t result_v = lps_len(argv[0].val.atom.val.as_str);
+	size_t result_v = lps_len(sexp_read_str(argv[0]));
 	return sexp_new_atom_uint(result_v, at);
 }
 // size_t -> str
-Sexp p_uninit_str_from_len(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_uninit_str_from_len(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	assert(! argv[0].is_list);
-	assert(argv[0].val.atom.type == A_UVAL);
-	size_t a_v;
-	a_v = argv[0].val.atom.val.uval;
-	lps result_v = lps_with_reserved_len(a_v);
+	lps result_v = lps_with_reserved_len(sexp_read_u64(argv[0]));
 	Sexp result = sexp_new_atom_str(result_v, at);
 	return result;
 }
 // str -> ()
-Sexp p_str_free(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_str_free(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	assert(! argv[0].is_list);
-	assert(argv[0].val.atom.type == A_STR);
-	lps_free(argv[0].val.atom.val.as_str);
+	lps_free(sexp_read_str(argv[0]));
 	return sexp_new_list(at);
 }
 
@@ -525,7 +532,7 @@ usage (assuming int literals are s32 by default)
 // eval doesn't free borrows, including the first arg which is always one
 // & and quote's arguments are read without freeing them
 /*
-Sexp eval(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp eval(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	Sexp result = NULL;
 	if (argc != 1) {
 		fprintf(stderr, "eval takes only one argument\n");
@@ -594,21 +601,18 @@ Sexp eval(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
 
 // C-derived primitives
 
-#define DEFINE_UNARY_FN(NAME, FN, IN_TYPE, IN_FIELD, OUT_TYPE, OUT_FIELD) \
-Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallInst at) { \
+#define DEFINE_UNARY_FN(NAME, FN, IN_TYPE, READAS, OUT_ATOM) \
+Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) { \
 	assert(argc == 1); \
 	Sexp a = argv[0]; \
 	assert(sizeof(IN_TYPE) <= sizeof(void*)); \
-	assert(sizeof(OUT_TYPE) <= sizeof(void*)); \
-	IN_TYPE a_v = a.val.atom.val.IN_FIELD; \
-	OUT_TYPE result_v = FN(a_v); \
-	Sexp result = sexp_new_atom_uint(0, at); \
-	result.val.atom.val.OUT_FIELD = result_v; \
+	IN_TYPE a_v = sexp_read_##READAS(a); \
+	Sexp result = sexp_new_atom_##OUT_ATOM(FN(a_v), at); \
 	return result; \
 }
 
-#define DEFINE_TERNARY_FN(NAME, FN, IN1_TYPE, IN1_FIELD, IN2_TYPE, IN2_FIELD, IN3_TYPE, IN3_FIELD, OUT_TYPE, OUT_FIELD) \
-Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallInst at) { \
+#define DEFINE_TERNARY_FN(NAME, FN, IN1_TYPE, IN1_READAS, IN2_TYPE, IN2_READAS, IN3_TYPE, IN3_READAS, OUT_TYPE, OUT_ATOM) \
+Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) { \
 	assert(argc == 3); \
 	Sexp a = argv[0]; \
 	Sexp b = argv[1]; \
@@ -617,55 +621,45 @@ Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallInst at) { \
 	assert(sizeof(IN2_TYPE) <= sizeof(void*)); \
 	assert(sizeof(IN3_TYPE) <= sizeof(void*)); \
 	assert(sizeof(OUT_TYPE) <= sizeof(void*)); \
-	IN1_TYPE a_v = a.val.atom.val.IN1_FIELD; \
-	IN2_TYPE b_v = b.val.atom.val.IN2_FIELD; \
-	IN3_TYPE c_v = c.val.atom.val.IN3_FIELD; \
-	OUT_TYPE result_v = FN(a_v, b_v, c_v); \
-	Sexp result = sexp_new_atom_uint(0, at); \
-	result.val.atom.val.OUT_FIELD = result_v; \
+	IN1_TYPE a_v = sexp_read_##IN1_READAS(a); \
+	IN2_TYPE b_v = sexp_read_##IN2_READAS(b); \
+	IN3_TYPE c_v = sexp_read_##IN3_READAS(c); \
+	Sexp result = sexp_new_atom_##OUT_ATOM(FN(a_v, b_v, c_v), at); \
 	return result; \
 }
 
 // ptr -> ()
-Sexp p_free(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_free(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	Sexp a = argv[0];
-	free(a.val.atom.val.as_ptr);
+	free(sexp_read_ptr(argv[0]));
 	Sexp result = sexp_new_list(at);
 	return result;
 }
 
 // (ptr, size_t) -> ptr
-Sexp p_realloc(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_realloc(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 2);
-	Sexp a = argv[0];
-	Sexp b = argv[1];
-	void* a_v = a.val.atom.val.as_ptr;
-	size_t b_v = b.val.atom.val.uval;
+	void* a_v = sexp_read_ptr(argv[0]);
+	size_t b_v = sexp_read_u64(argv[1]);
 	void* result_v = realloc(a_v, b_v);
-	Sexp result = sexp_new_atom_ptr(result_v, at);
-	return result;
+	return sexp_new_atom_ptr(result_v, at);
 }
 
-Sexp p_alloca(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_alloca(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 1);
-	Sexp a = argv[0];
-	size_t a_v = a.val.atom.val.uval;
-	void *result_v = calltree_alloc(at.node, a_v);
-	Sexp result = sexp_new_atom_uint(0, at);
-	result.val.atom.val.as_ptr = result_v;
-	return result;
+	void *result_v = calltree_alloc(at, sexp_read_u64(argv[0]));
+	return sexp_new_atom_ptr(result_v, at);
 }
-DEFINE_UNARY_FN(p_malloc, malloc, size_t, uval, void*, as_ptr)
-DEFINE_TERNARY_FN(p_memcmp, memcmp, void*, as_ptr, void*, as_ptr, size_t, uval, int, sval);
-DEFINE_TERNARY_FN(p_memcpy, memcpy, void*, as_ptr, void*, as_ptr, size_t, uval, void*, as_ptr);
-DEFINE_TERNARY_FN(p_memset, memset, void*, as_ptr, int, sval, size_t, uval, void*, as_ptr);
+DEFINE_UNARY_FN(p_malloc, malloc, size_t, u64, ptr)
+DEFINE_TERNARY_FN(p_memcmp, memcmp, void*, ptr, void*, ptr, size_t, u64, int, int)
+DEFINE_TERNARY_FN(p_memcpy, memcpy, void*, ptr, void*, ptr, size_t, u64, void*, ptr)
+DEFINE_TERNARY_FN(p_memset, memset, void*, ptr, int, s64, size_t, u64, void*, ptr)
 
 // (Bint S S) -> S
-Sexp p_if(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
+Sexp p_if(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
 	assert(argc == 3);
-	Sexp cond = argv[0];
-	int cond_v = cond.val.atom.val.sval;
+	EVAL(cond, 0)
+	int cond_v = sexp_read_s64(cond);
 	Sexp branch;
 	if (cond_v)
 		branch = argv[1];
@@ -674,74 +668,99 @@ Sexp p_if(size_t argc, Sexp *argv, Interpreter *I, CallInst at) {
 	return sexp_dup(branch);
 }
 
-#define DEFINE_BINARY_OP(NAME, OP, IN_TYPE, IN_FIELD, OUT_TYPE, OUT_FIELD, OUT_ATOM) \
-Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallInst at) { \
+// returns the final expr's result
+// does not use a dispatcher, performs the loop in C
+// (Bint S) -> S
+Sexp p_while(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
+	assert(argc > 0);
+	Sexp result = sexp_new_list(at);
+	while (1) {
+		EVAL(cond, 0)
+		if (!sexp_read_s64(cond))
+			break;
+		for (size_t i = 1; i < argc; ++i) {
+			if (i+1 == argc) {
+				EVAL(ignored, i)
+			} else {
+				EVAL(result, i)
+			}
+		}
+		// after the iteration, wipe eval state for the next
+		memset(
+		        at->state.call_results,
+		        0,
+		        sexp_num_children(*at->state.sexp_called) * sizeof(Sexp)
+		      );
+	}
+	return sexp_dup(result);
+}
+
+#define DEFINE_BINARY_OP(NAME, OP, IN_TYPE, READAS, OUT_TYPE, OUT_ATOM) \
+Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) { \
 	assert(argc == 2); \
-	Sexp a = eval(argv[0], I, at); \
-	Sexp b = eval(argv[1], I, at); \
+	EVAL(a, 0) \
+	EVAL(b, 1) \
 	assert(sizeof(IN_TYPE) <= sizeof(void*)); \
 	assert(sizeof(OUT_TYPE) <= sizeof(void*)); \
-	IN_TYPE a_v = a.val.atom.val.IN_FIELD; \
-	IN_TYPE b_v = b.val.atom.val.IN_FIELD; \
+	IN_TYPE a_v = sexp_read_##READAS(a); \
+	IN_TYPE b_v = sexp_read_##READAS(b); \
 	OUT_TYPE result_v = a_v OP b_v; \
-	Sexp result = sexp_new_atom_##OUT_ATOM(0, at); \
-	result.val.atom.val.OUT_FIELD = result_v; \
+	Sexp result = sexp_new_atom_##OUT_ATOM(result_v, at); \
 	return result; \
 }
 
-#define DEFINE_UNARY_OP(NAME, OP, IN_TYPE, IN_FIELD, OUT_TYPE, OUT_FIELD) \
-Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallInst at) { \
+#define DEFINE_UNARY_OP(NAME, OP, IN_TYPE, READAS, OUT_TYPE, OUT_ATOM) \
+Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) { \
 	assert(argc == 1); \
-	Sexp a = argv[0]; \
+	EVAL(a, 0) \
 	assert(sizeof(IN_TYPE) <= sizeof(void*)); \
 	assert(sizeof(OUT_TYPE) <= sizeof(void*)); \
-	IN_TYPE a_v = a.val.atom.val.IN_FIELD; \
+	IN_TYPE a_v = sexp_read_##READAS(a); \
 	OUT_TYPE result_v = OP a_v; \
-	Sexp result = sexp_new_atom_uint(0, at); \
-	result.val.atom.val.OUT_FIELD = result_v; \
+	Sexp result = sexp_new_atom_##OUT_ATOM(result_v, at); \
 	return result; \
 }
 
-DEFINE_BINARY_OP(p_and, &&, int, sval, int, sval, int)
-DEFINE_BINARY_OP(p_or, ||, int, sval, int, sval, int)
-DEFINE_UNARY_OP(p_not, !, int, sval, int, sval)
-DEFINE_BINARY_OP(p_biteq, ==, uintptr_t, uval, int, sval, int) // technically UB union usage
-DEFINE_BINARY_OP(p_bitneq, !=, uintptr_t, uval, int, sval, int)
-DEFINE_BINARY_OP(p_bitand, &, uintptr_t, uval, uintptr_t, uval, int)
-DEFINE_BINARY_OP(p_bitor, |, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_bitxor, ^, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_UNARY_OP(p_bitnot, ~, uintptr_t, uval, uintptr_t, uval)
+DEFINE_BINARY_OP(p_and, &&, int, s64, int, int)
+DEFINE_BINARY_OP(p_or, ||, int, s64, int, int)
+DEFINE_UNARY_OP(p_not, !, int, s64, int, int)
+DEFINE_BINARY_OP(p_biteq, ==, uintptr_t, u64, int, int) // technically UB union usage
+DEFINE_BINARY_OP(p_bitneq, !=, uintptr_t, u64, int, int)
+DEFINE_BINARY_OP(p_bitand, &, uintptr_t, u64, uintptr_t, int)
+DEFINE_BINARY_OP(p_bitor, |, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_bitxor, ^, uintptr_t, u64, uintptr_t, uint)
+DEFINE_UNARY_OP(p_bitnot, ~, uintptr_t, u64, uintptr_t, uint)
 
-DEFINE_BINARY_OP(p_uadd, +, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_usub, -, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_umul, *, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_udiv, /, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_umod, &, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_ushl, <<, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_ushr, >>, uintptr_t, uval, uintptr_t, uval, uint)
-DEFINE_BINARY_OP(p_ult, <, uintptr_t, uval, int, sval, int)
-DEFINE_BINARY_OP(p_ulte, <=, uintptr_t, uval, int, sval, int)
-DEFINE_BINARY_OP(p_ugt, >, uintptr_t, uval, int, sval, int)
-DEFINE_BINARY_OP(p_ugte, >=, uintptr_t, uval, int, sval, int)
-DEFINE_BINARY_OP(p_sadd, +, intptr_t, sval, intptr_t, sval, int)
-DEFINE_BINARY_OP(p_ssub, -, intptr_t, sval, intptr_t, sval, int)
-DEFINE_BINARY_OP(p_smul, *, intptr_t, sval, intptr_t, sval, int)
-DEFINE_BINARY_OP(p_sdiv, /, intptr_t, sval, intptr_t, sval, int)
-DEFINE_BINARY_OP(p_smod, &, intptr_t, sval, intptr_t, sval, int)
-DEFINE_BINARY_OP(p_sshl, <<, intptr_t, sval, intptr_t, sval, int)
-DEFINE_BINARY_OP(p_sshr, >>, intptr_t, sval, intptr_t, sval, int)
-DEFINE_BINARY_OP(p_slt, <, intptr_t, sval, int, sval, int)
-DEFINE_BINARY_OP(p_slte, <=, intptr_t, sval, int, sval, int)
-DEFINE_BINARY_OP(p_sgt, >, intptr_t, sval, int, sval, int)
-DEFINE_BINARY_OP(p_sgte, >=, intptr_t, sval, int, sval, int)
-DEFINE_BINARY_OP(p_fadd, +, double, fval, double, fval, float)
-DEFINE_BINARY_OP(p_fsub, -, double, fval, double, fval, float)
-DEFINE_BINARY_OP(p_fmul, *, double, fval, double, fval, float)
-DEFINE_BINARY_OP(p_fdiv, /, double, fval, double, fval, float)
-DEFINE_BINARY_OP(p_flt, <, double, fval, int, sval, int)
-DEFINE_BINARY_OP(p_flte, <=, double, fval, int, sval, int)
-DEFINE_BINARY_OP(p_fgt, >, double, fval, int, sval, int)
-DEFINE_BINARY_OP(p_fgte, >=, double, fval, int, sval, int)
+DEFINE_BINARY_OP(p_uadd, +, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_usub, -, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_umul, *, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_udiv, /, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_umod, &, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_ushl, <<, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_ushr, >>, uintptr_t, u64, uintptr_t, uint)
+DEFINE_BINARY_OP(p_ult, <, uintptr_t, u64, int, int)
+DEFINE_BINARY_OP(p_ulte, <=, uintptr_t, u64, int, int)
+DEFINE_BINARY_OP(p_ugt, >, uintptr_t, u64, int, int)
+DEFINE_BINARY_OP(p_ugte, >=, uintptr_t, u64, int, int)
+DEFINE_BINARY_OP(p_sadd, +, intptr_t, s64, intptr_t, int)
+DEFINE_BINARY_OP(p_ssub, -, intptr_t, s64, intptr_t, int)
+DEFINE_BINARY_OP(p_smul, *, intptr_t, s64, intptr_t, int)
+DEFINE_BINARY_OP(p_sdiv, /, intptr_t, s64, intptr_t, int)
+DEFINE_BINARY_OP(p_smod, &, intptr_t, s64, intptr_t, int)
+DEFINE_BINARY_OP(p_sshl, <<, intptr_t, s64, intptr_t, int)
+DEFINE_BINARY_OP(p_sshr, >>, intptr_t, s64, intptr_t, int)
+DEFINE_BINARY_OP(p_slt, <, intptr_t, s64, int, int)
+DEFINE_BINARY_OP(p_slte, <=, intptr_t, s64, int, int)
+DEFINE_BINARY_OP(p_sgt, >, intptr_t, s64, int, int)
+DEFINE_BINARY_OP(p_sgte, >=, intptr_t, s64, int, int)
+DEFINE_BINARY_OP(p_fadd, +, double, f64, double, float)
+DEFINE_BINARY_OP(p_fsub, -, double, f64, double, float)
+DEFINE_BINARY_OP(p_fmul, *, double, f64, double, float)
+DEFINE_BINARY_OP(p_fdiv, /, double, f64, double, float)
+DEFINE_BINARY_OP(p_flt, <, double, f64, int, int)
+DEFINE_BINARY_OP(p_flte, <=, double, f64, int, int)
+DEFINE_BINARY_OP(p_fgt, >, double, f64, int, int)
+DEFINE_BINARY_OP(p_fgte, >=, double, f64, int, int)
 
 #define PRIM_ENTRY(primname) \
 primitives_set_macro(prims, lps_from_cstr("p-"#primname), p_##primname);
@@ -756,12 +775,12 @@ read, quote,
 symboltable_push, symboltable_pop, symboltable_peek,
 print, format,
 sendmsg, awaitmsg,
-adrof, deref, sexp_size,
+adrof, deref, sexp_size, typeof,
 path_at,
 strlen, uninit_str_from_len, str_free,
 malloc, free, realloc, alloca,
 memcmp, memcpy, memset,
-if,
+if, while,
 and, or, not,
 biteq, bitneq, bitand, bitor, bitxor, bitnot,
 uadd, usub, umul, udiv,
