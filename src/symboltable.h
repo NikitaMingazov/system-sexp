@@ -1,27 +1,21 @@
 #ifndef SYMBOLTABLE_H_
 #define SYMBOLTABLE_H_
 
+#include "include/ht.h"
+#include "include/arena.h"
 #include "sexp.h"
 #include "lps.h"
 
-typedef uint32_t u32;
-
-typedef struct entry {
-	lps key;
-	Sexp val;
-} Entry;
+typedef Ht(lps, Sexp) inner;
 
 typedef struct symboltable {
-	Entry *hashtable;
-	u32 capacity;
-	u32 size;
+	inner table;
 } Symboltable;
 
-
-Symboltable *symboltable_new();
+Symboltable *symboltable_new(Arena *a);
 void symboltable_free(Symboltable *st);
 
-int symboltable_set(Symboltable *st, const lps key, Sexp val);
+int symboltable_set(Symboltable *st, const lps key, Sexp val, Arena *a);
 Sexp symboltable_remove(Symboltable *st, const lps key);
 Sexp symboltable_peek(Symboltable *st, const lps key);
 // mutable reference

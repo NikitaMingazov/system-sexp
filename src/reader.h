@@ -11,7 +11,7 @@
 // returns sexp_null (no flag) if EOF reached
 // if parsing error (only mismatched parentheses) returns sexp_null and
 //  sets an error flag in the interpreter
-Sexp read(Interpreter *I);
+Sexp reads(Interpreter *I);
 
 // reads a single char
 int readc(Interpreter *I);

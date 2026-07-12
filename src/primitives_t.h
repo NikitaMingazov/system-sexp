@@ -5,7 +5,7 @@
 #include "sexp.h"
 #include "readtable.h"
 
-typedef Sexp (*p_macro)(size_t argc, Sexp* argv, Interpreter* I, CallTree *at);
+typedef Sexp (*p_macro)(size_t argc, Sexp* argv, Interpreter* I, CallTree *job);
 
 typedef int (*char_pred)(char);
 

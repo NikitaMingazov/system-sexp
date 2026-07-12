@@ -27,6 +27,7 @@ int main(int argc, char **argv) {
 	}
 all_done:
 	fclose(stream);
+	interpreter_free(I);
 	return 0;
 }
 

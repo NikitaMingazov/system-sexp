@@ -1,5 +1,6 @@
 // lexer and parser are merged because sexps are simple
 #include "reader.h"
+#include "include/nob.h"
 #include "readtable.h"
 #include "interpreter.h"
 #include "lps.h"
@@ -38,13 +39,20 @@ int unreadc(Interpreter *I, int c) {
 	return r;
 }
 
+typedef struct {
+	Sexp *items;
+	u32 count;
+	u32 capacity;
+} Sexps;
+
 // returns the first sexp found in the context's stream
-Sexp read(Interpreter *I) {
+Sexp reads(Interpreter *I) {
 	int c = readc(I);
 	while (c == ' ' || c == '\n') {
 		c = readc(I);
 	}
 	if (readtable_get_macro(I->rt, c)) {
+		// TODO: pass to dispatcher 0
 		return (*readtable_get_macro(I->rt, c)) (I, c, I->tail_row, I->tail_col);
 	}
 	if (c == EOF) // TODO: send done msg
@@ -56,7 +64,7 @@ Sexp read(Interpreter *I) {
 	u16 open_col = I->tail_col;
 	if (c == ')') {
 		fprintf(stderr, "reader: Unexpected ')' at %d:%d\n", open_row, open_col);
-		I->error_flag ^= ERR_UNMATCED_RPAR;
+		I->error_flags ^= ERR_UNMATCED_RPAR;
 		return sexp_null();
 	}
 	// returning an atom
@@ -80,25 +88,30 @@ Sexp read(Interpreter *I) {
 	// returning a list
 	// pop the '('
 	readc(I);
-	Sexp out_list = sexp_new_source_list(open_row, open_col);
+	// Sexp out_list = sexp_new_source_list(open_row, open_col);
+	Sexps out_list = {0};
 	uint child_start_row;
 	uint child_start_col;
 	while ((c = readc(I))) {
 		if (readtable_get_macro(I->rt, c)) {
-			sexp_list_append(&out_list, (*readtable_get_macro(I->rt, c)) (I, c, I->tail_row, I->tail_col));
+			nob_da_append(&out_list,
+			              (*readtable_get_macro(I->rt, c)) (I, c, I->tail_row, I->tail_col)
+			);
 			continue;
 		}
 		switch (c) {
 			case EOF: // TODO: send this message and block, wait for message to continue
 				fprintf(stderr, "reader: Unmatched '(' at %d:%d\n", open_row, open_col);
-				I->error_flag ^= ERR_UNCLOSED_LPAR;
+				I->error_flags ^= ERR_UNCLOSED_LPAR;
 				return sexp_null();
 				break;
 			case ' ': case '\n':
 				break;
 			case '(':
 				unreadc(I, c);
-				sexp_list_append(&out_list, read(I));
+				nob_da_append(&out_list,
+			                  reads(I)
+				);
 				break;
 			case ')':
 				goto done;
@@ -121,13 +134,22 @@ Sexp read(Interpreter *I) {
 				        child_start_row,
 				        child_start_col
 				);
-				sexp_list_append(&out_list, atom);
+				nob_da_append(&out_list,
+			                  atom
+				);
 				buffer_clear(buf);
 				break;
 		}
 	}
 done:
 	buffer_free(buf);
-	return out_list;
+	Sexp result = sexp_new_source_list(open_row, open_col);
+	result.word.num_children = out_list.count;
+	if (out_list.count > 0) {
+		result.qword.children = calltree_alloc(I->call_root, out_list.count * sizeof(Sexp));
+		memcpy(result.qword.children, out_list.items, out_list.count * sizeof(Sexp));
+	}
+	nob_da_free(out_list); // commenting this out REDUCES memory usage???
+	return result;
 }
 

@@ -1,15 +1,21 @@
 #ifndef SEXP_H_
 #define SEXP_H_
 
+#include "include/arena.h"
 #include "interpreter_t.h"
 #include "lps.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
+typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t u8;
+
+// wasm semantics
+// #define canonical_NaN (u64)0x7ff8000000000000;
+// #define canonical_NaN_neg (u64)0xfff8000000000000;
 
 // this is for sexp_free and is not exposed to ss
 // I'd like to remove this with scoped arenas later
@@ -72,8 +78,10 @@ Sexp sexp_new_source_atom(lps str, u16 row, u16 col);
 Sexp sexp_new_source_list(u16 row, u16 col);
 // used in primitive macros TODO: move out of sexp
 Sexp sexp_new_list(CallTree *at);
+Sexp sexp_new_atom(union atom_val val, enum atom_type type, CallTree *at);
 Sexp sexp_new_atom_str(lps str, CallTree *at);
 Sexp sexp_new_atom_ptr(void *ptr, CallTree *at);
+Sexp sexp_new_atom_ref(void *ptr, CallTree *at);
 Sexp sexp_new_atom_int(intptr_t value, CallTree *at);
 Sexp sexp_new_atom_uint(uintptr_t value, CallTree *at);
 Sexp sexp_new_atom_float(double value, CallTree *at);
@@ -81,7 +89,7 @@ Sexp sexp_new_atom_float(double value, CallTree *at);
 // because of the nasty structure for alignment, these methods
 //  provide a stable and ergonomic interface
 bool sexp_is_list(Sexp s);
-// atom reads
+// atom reads (type-safe)
 enum atom_type sexp_atom_type(Sexp s);
 uintptr_t sexp_read_u64(Sexp s);
 intptr_t sexp_read_s64(Sexp s);
@@ -91,17 +99,21 @@ lps sexp_read_str(Sexp s);
 // list_reads
 Sexp* sexp_children(Sexp s);
 size_t sexp_num_children(Sexp s);
-void sexp_list_append(Sexp *list, Sexp addition);
+void sexp_list_append(Sexp *list, Sexp addition, Arena *a);
+// create an uninit list with a len
+Sexp sexp_list_reserved(CallTree *at, size_t len);
+// returns reference to nth element, or NULL if OOB
+Sexp *sexp_list_nth(Sexp list, size_t n);
 
 bool sexp_is_nil(Sexp s);
-
+// convert to string
 lps sexp_format(Sexp sexp);
 
 // deep copy of a sexp
 Sexp sexp_dup(Sexp sexp);
 // deep free of a sexp's arrays
 // does not free the ptr atoms
-void sexp_free(Sexp sexp);
+void sexp_destroy(Sexp sexp);
 
 // a zeroed sexp to represent internal errors/end of stream/etc.
 Sexp sexp_null();

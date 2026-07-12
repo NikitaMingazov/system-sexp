@@ -1,5 +1,6 @@
 #include "sexp.h"
 #include "buffer.h"
+#include "include/arena.h"
 #include "interpreter.h"
 #include "lps.h"
 #include <assert.h>
@@ -40,13 +41,12 @@ intptr_t sexp_read_s64(Sexp s) {
 	// assert(sexp_atom_type(s) == A_SVAL);
 	return s.qword.atom.sval;
 }
-
 double sexp_read_f64(Sexp s) {
 	assert(sexp_atom_type(s) == A_FVAL);
 	return s.qword.atom.fval;
 }
 void* sexp_read_ptr(Sexp s) {
-	assert(sexp_atom_type(s) == A_PTR);
+	assert(sexp_atom_type(s) == A_PTR || sexp_atom_type(s) == A_UVAL);
 	return s.qword.atom.as_ptr;
 }
 lps sexp_read_str(Sexp s) {
@@ -61,6 +61,11 @@ Sexp* sexp_children(Sexp s) {
 size_t sexp_num_children(Sexp s) {
 	assert(s.is_list);
 	return s.word.num_children;
+}
+// returns reference to nth element, or NULL if OOB
+Sexp *sexp_list_nth(Sexp list, size_t n) {
+	assert(sexp_num_children(list) > n);
+	return &sexp_children(list)[n];
 }
 
 Sexp sexp_new_source_atom(lps val, u16 row, u16 col) {
@@ -90,19 +95,34 @@ Sexp sexp_new_list(CallTree *at) {
 	return sexp_new_list_at(row, col);
 }
 
-void sexp_list_append(Sexp *target_list, Sexp addition) {
+void sexp_list_append(Sexp *target_list, Sexp addition, Arena *a) {
 	Sexp *children = sexp_children(*target_list);
 	target_list->word.num_children++;
 	size_t num_children = sexp_num_children(*target_list);
 	children = realloc(children, sizeof(*children) * num_children);
+	// TODO
+	// children = arena_alloc(a, sizeof(*children) * num_children);
 	children[num_children-1] = addition;
 	target_list->qword.children = children;
 }
 
+// create an uninit list of a len
+Sexp sexp_list_reserved(CallTree *at, size_t len) {
+	Sexp new = sexp_new_list(at);
+	new.qword.children = calltree_alloc(at, len * sizeof(Sexp));
+	memset(new.qword.children, 0, len * sizeof(Sexp));
+	new.word.num_children = len;
+	return new;
+}
+
+// allocates a new sexp into a given lifetime
+// TODO
+// Sexp sexp_dup(Sexp sexp, Arena *new_lifetime) {
 Sexp sexp_dup(Sexp sexp) {
 	Sexp dup;
-	memcpy(&dup, &sexp, sizeof(dup));
+	memcpy(&dup, &sexp, sizeof(Sexp));
 	if (sexp.is_list) {
+		dup.qword.children = calloc(sexp.word.num_children, sizeof(Sexp));
 		for (size_t i = 0; i < sexp_num_children(sexp); ++i) {
 			dup.qword.children[i] = sexp_dup(sexp_children(sexp)[i]);
 		}
@@ -110,10 +130,10 @@ Sexp sexp_dup(Sexp sexp) {
 	return dup;
 }
 
-void sexp_free(Sexp sexp) {
+void sexp_destroy(Sexp sexp) {
 	if (sexp.is_list) {
 		for (size_t i = 0; i < sexp_num_children(sexp); ++i) {
-			sexp_free(sexp_children(sexp)[i]);
+			sexp_destroy(sexp_children(sexp)[i]);
 		}
 		free(sexp_children(sexp));
 	} else {
@@ -164,7 +184,7 @@ void sexp_format_into_buffer(const Sexp s, Buffer *buf) {
 		size_t len;
 		switch (sexp_atom_type(s)) {
 		case A_STR: case A_SYM: {
-			buffer_append_chars(buf, sexp_read_str(s), lps_len(sexp_read_str(s)));
+			buffer_append_chars(buf, (char*)sexp_read_str(s), lps_len(sexp_read_str(s)));
 		} break;
 		case A_UVAL: {
 			tmp = format("%lu", &len, sexp_read_u64(s));
@@ -186,7 +206,7 @@ void sexp_format_into_buffer(const Sexp s, Buffer *buf) {
 			buffer_append_chars(buf, tmp, len);
 			free(tmp);
 		} break;
-		case A_NULL: abort();
+		case A_NULL: {} abort();
 		}
 	}
 }
