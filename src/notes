@@ -17,10 +17,6 @@ but can't do promise y, need to wait for y
 block and give the runtime a hook for "queue this when a is written to"
 then the runtime requeues (do a)
 
-eval keeps an arg stack
-it gets new sexps from evaluated ones
-the dispatcher calls eval using the call stack as program counter
-
 send exec path to dispatcher N
 or send it to scheduler
 scheduler is implemented in userspace, it uses send to dispatcher N itself
@@ -36,8 +32,6 @@ interpreter forking:
   passing messages back to compiler, including errors,
   so errors can be non-fatal if the parent chooses for it to be so
   f
-
-rewrite interpreter in C++
 
 symbol overloading
 symboltable-overload (not primitive lol)

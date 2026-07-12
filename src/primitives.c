@@ -1,19 +1,16 @@
 // the language's intrinsics
 // I call them primitives because (p-name arg) is better than (i-name arg)
-// as concerning these having a 'namespace'. also I is taken by "interpreter"
-#include "include/nob.h"
+// , as concerning these having a 'namespace'. also I is taken by "interpreter"
 #define HT_IMPLEMENTATION
 #include "include/ht.h"
 
 #include "primitives.h"
-#include "master_slave_channel.h"
 #include "interpreter.h"
 #include "buffer.h"
 #include "reader.h"
 #include "readtable.h"
 #include "lps.h"
 #include "sexp.h"
-#include <setjmp.h>
 #include <threads.h>
 #include <assert.h>
 #include <stddef.h>
@@ -325,163 +322,6 @@ void primitive_reader_macros(Primitives *prims) {
 	primitives_set_reader(prims, '9', numeral_reader_macro);
 }
 
-typedef struct {
-	Sexp **items;
-	uint count;
-	uint capacity;
-} Sexps;
-
-// replaces symbols with values in a sexp
-static void replace_bindings(Sexp *macrobody, lps argc_bind, Sexp argc_val, lps argv_bind, Sexp argv_val) {
-	Sexps to_check = {0};
-	nob_da_append(&to_check, macrobody);
-	while (to_check.count > 0) {
-		Sexp *cur = nob_da_pop(&to_check);
-		if (cur->is_list) {
-			for (size_t i = 0; i < sexp_num_children(*cur); ++i) {
-				nob_da_append(&to_check, sexp_list_nth(*cur, i));
-			}
-		} else if (sexp_atom_type(*cur) == A_SYM) {
-			if (lps_cmp(argc_bind, sexp_read_str(*cur)) == 0)
-				*cur = argc_val;
-			else if (lps_cmp(argv_bind, sexp_read_str(*cur)) == 0)
-				*cur = argv_val;
-		}
-	}
-}
-
-extern thread_local jmp_buf unwind_point;
-
-// the primitive form of eval
-// S -> S
-Sexp p_exec(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) {
-	assert(argc == 1);
-	// atom: fetch symbol, do nothing for literals
-	if (!argv[0].is_list) {
-		switch (sexp_atom_type(argv[0])) {
-		case A_SYM: {
-			if (primitives_contains_macro(I->prims, sexp_read_str(argv[0]))) {
-				return argv[0];
-			}
-			if (!calltree_get_symbol_val_ref(at, sexp_read_str(argv[0]))) {
-				fprintf(stderr, "p-exec: could not find symbol "LPS_Fmt"\n", LPS_Arg(sexp_read_str(argv[0])));
-				abort();
-			}
-			return *calltree_get_symbol_val_ref(at, sexp_read_str(argv[0]));
-		} break;
-		default: {
-			return argv[0];
-		} abort();
-		}
-	}
-	Sexp *children = sexp_children(argv[0]);
-	size_t num_children = sexp_num_children(argv[0]);
-	// (p-exec ()) returns ()
-	if (num_children == 0)
-		return argv[0];
-	// TODO: macro literal support (eval this rather than look in symboltable)
-	lps macro_str = sexp_read_str(children[0]);
-	size_t child_argc = num_children-1;
-	Sexp *child_argv = child_argc > 0 ? &children[1] : NULL;
-	if (primitives_contains_macro(I->prims, macro_str)) {
-		Sexp *to_eval = calltree_alloc(at, sizeof(Sexp));
-		*to_eval = sexp_dup(argv[0]);
-		CallTree *call = calltree_child_at(at, to_eval, child_argc, 0, &I->arenapool);
-		Sexp result = sexp_dup(primitives_get_macro
-		                        (I->prims, macro_str)
-		                        (child_argc, child_argv, I, call));
-		calltree_destroy(*call, &I->arenapool);
-		return result;
-	} else {
-		// (p-st-push name
-		//   (()
-		//    ((argc_bind argv_bind)
-		//     (S0 (\ p-st-peek argc_bind))
-		//     (S1 (\ p-st-peek argv_bind)))))
-		// the body is interpreted as a progn
-		// unwrapping symbol
-		// (() name) defines a macro in the symboltable
-		Sexp *st_entry = calltree_get_symbol_val_ref(at, macro_str);
-		if (!st_entry) {
-			fprintf(stderr, "p-exec: could not find symbol "LPS_Fmt"\n", LPS_Arg(macro_str));
-			abort();
-		}
-		// primitive macros as symbols evaluate to themselves, if something returned one from the symboltable
-		// that is symbol is an alias of a macro, be it a prim symbol or a list
-		if (!st_entry->is_list && sexp_atom_type(*st_entry) == A_SYM) {
-			if (primitives_contains_macro(I->prims, sexp_read_str(*st_entry))) {
-				Sexp *to_eval = calltree_alloc(at, sizeof(Sexp));
-				*to_eval = sexp_dup(argv[0]);
-				CallTree *call = calltree_child_at(at, to_eval, child_argc, 0, &I->arenapool);
-				Sexp result = sexp_dup(primitives_get_macro
-				                        (I->prims, sexp_read_str(*st_entry))
-		                                (child_argc, child_argv, I, call));
-				calltree_destroy(*call, &I->arenapool);
-				return result;
-			} else {
-				abort();
-			}
-		}
-		Sexp *st_children = sexp_children(*st_entry);
-		assert(sexp_num_children(*st_entry) == 2);
-		assert(sexp_is_nil(st_children[0]));
-		Sexp st_val = st_children[1];
-		assert(sexp_num_children(st_val) >= 2);
-		assert(lps_cmp(sexp_read_str(sexp_children(st_val)[0]), lps_from_cstr("p-macrobody")) == 0);
-		Sexp arg_binds = sexp_children(st_val)[1];
-		assert(arg_binds.is_list);
-		assert(sexp_num_children(arg_binds) == 2);
-		Sexp *alloced_macro = calltree_alloc(at, sizeof(Sexp));
-		*alloced_macro = sexp_dup(st_val);
-		CallTree *child_call = calltree_child_at(at, alloced_macro, child_argc, 0, &I->arenapool);
-		Sexp argc_node = sexp_new_atom_uint(child_argc, child_call);
-		lps argc_bind_to = sexp_read_str(sexp_children(arg_binds)[0]);
-		Sexp argv_node = sexp_new_atom_ptr(child_argv, child_call);
-		lps argv_bind_to = sexp_read_str(sexp_children(arg_binds)[1]);
-		replace_bindings(alloced_macro, argc_bind_to, argc_node, argv_bind_to, argv_node);
-		if (!sexp_is_null(at->state.call_results[0])) {
-			return at->state.call_results[0];
-		} else {
-			Sexp result = sexp_dup(p_exec(1, alloced_macro, I, child_call));
-			calltree_destroy(*child_call, &I->arenapool);
-			return result;
-		}
-	}
-}
-
 #include "intrinsics.h"
-
-#define PRIM_ENTRY(primname) \
-primitives_set_macro(prims, lps_from_cstr("p-"#primname), p_##primname);
-
-#include "include/foreach.h"
-Primitives *primitives_default() {
-	Primitives *prims = primitives_new();
-	FOREACH(PRIM_ENTRY,
-	        exec, slice_eval, macrobody, is_primitive, multi_eval,
-	        read, quote,
-	        let, unlet, get,
-	        print, format,
-	        sendmsg, awaitmsg,
-	        list, adrof, deref, sexp_size, typeof, list_from_sexp_slice,
-	        path_at,
-	        strlen, uninit_str_from_len, str_free,
-	        malloc, free, realloc, alloca,
-	        memcmp, memcpy, memset,
-	        if, while,
-	        and, or, not,
-	        biteq, bitneq, bitand, bitor, bitxor, bitnot,
-	        uadd, usub, umul, udiv,
-	        ult, ulte, ugt, ugte,
-	        umod, ushl, ushr,
-	        sadd, ssub, smul, sdiv,
-	        slt, slte, sgt, sgte,
-	        smod, sshl, sshr,
-	        fadd, fsub, fmul, fdiv,
-	        flt, flte, fgt, fgte
-	)
-	prims->default_eval_binding = lps_from_cstr("p-exec");
-	primitive_reader_macros(prims);
-	return prims;
-}
+#include "exported_intrinsics.h"
 

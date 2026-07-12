@@ -52,7 +52,6 @@ Sexp reads(Interpreter *I) {
 		c = readc(I);
 	}
 	if (readtable_get_macro(I->rt, c)) {
-		// TODO: pass to dispatcher 0
 		return (*readtable_get_macro(I->rt, c)) (I, c, I->tail_row, I->tail_col);
 	}
 	if (c == EOF) // TODO: send done msg

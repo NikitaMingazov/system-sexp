@@ -1,3 +1,4 @@
 .cache
 ssi
 ignore
+compile_commands.json

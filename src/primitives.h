@@ -14,7 +14,7 @@ bool primitives_contains_macro(const Primitives *prims, const lps fn);
 void primitives_set_macro(Primitives *prims, const lps fn, p_macro macro);
 void primitives_unset_macro(Primitives *prims, const lps fn);
 
-// eval uses this one
+// interpreter.c uses this one
 extern Sexp p_exec(size_t argc, Sexp *argv, Interpreter *I, CallTree *at);
 
 #endif
