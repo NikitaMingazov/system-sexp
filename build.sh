@@ -2,7 +2,7 @@
 # eventually this will be rewritten in system-sexp, with a nob.c bootstrap
 
 # download source and build ctime-transpiler
-mkd -p build
+mkdir -p build
 cd build
 git clone 'https://github.com/NikitaMingazov/ctime' --depth 1
 cd ctime
