@@ -246,7 +246,7 @@ ctt_str hm_template(const char *K, const char *V) {
 	char *K_fmted = hm_format_type(K);
 	char *V_fmted = hm_format_type(V);
 	char *guard = ct_format("GUARD_HM_%s_%s_C", K_fmted, V_fmted);
-	char *guarded_template = ct_format("#ifndef %s\n#define %s\n%s\n#endif\n", guard, guard, hm_template_quote);
+	char *guarded_template = ct_format("#ifndef %s\n#define %s\n%s\n#endif // #ifndef %s\n", guard, guard, hm_template_quote, guard);
 	// replacing * in mangled typenames but not inner types
 	char *with_typenames = ct_substr_replace(ct_substr_replace(guarded_template, "%fV", V_fmted), "%fK", K_fmted);
 	char *formatted = ct_substr_replace(ct_substr_replace(with_typenames, "%V", V), "%K", K);

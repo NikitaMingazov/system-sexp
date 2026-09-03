@@ -79,6 +79,7 @@ Sexp sexp_new_source_list(u16 row, u16 col);
 // used in primitive macros TODO: move out of sexp
 Sexp sexp_new_list(CallTree *at);
 Sexp sexp_new_atom(union atom_val val, enum atom_type type, CallTree *at);
+Sexp sexp_new_atom_sym(lps str, CallTree *at);
 Sexp sexp_new_atom_str(lps str, CallTree *at);
 Sexp sexp_new_atom_ptr(void *ptr, CallTree *at);
 Sexp sexp_new_atom_ref(void *ptr, CallTree *at);

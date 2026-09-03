@@ -1,14 +1,25 @@
 [
   {
+    "file": "scripts/export_intrinsics.c",
+    "arguments": [
+      "/usr/bin/cc",
+      "-o",
+      "scripts/export_intrinsics",
+      "scripts/export_intrinsics.c"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "scripts/export_intrinsics"
+  },
+  {
     "file": "buffer.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "buffer.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -16,13 +27,13 @@
   {
     "file": "interpreter.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "interpreter.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -30,13 +41,13 @@
   {
     "file": "lps.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "lps.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -44,13 +55,13 @@
   {
     "file": "main.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "main.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -58,13 +69,13 @@
   {
     "file": "master_slave_channel.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "master_slave_channel.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -72,13 +83,13 @@
   {
     "file": "primitives.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "primitives.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -86,13 +97,13 @@
   {
     "file": "reader.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "reader.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -100,13 +111,13 @@
   {
     "file": "readtable.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "readtable.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -114,13 +125,13 @@
   {
     "file": "sexp.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "sexp.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"
@@ -128,13 +139,27 @@
   {
     "file": "symboltable.c",
     "arguments": [
-      "/usr/bin/gcc",
+      "/usr/bin/clang",
       "-o",
       "ssi",
       "symboltable.c",
       "-g",
       "-fshort-enums",
-      "-fno-strict-aliasing"
+      "-fdefer-ts"
+    ],
+    "directory": "/home/lain/git/system-sexp/src",
+    "output": "ssi"
+  },
+  {
+    "file": "arenapool.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-o",
+      "ssi",
+      "arenapool.c",
+      "-g",
+      "-fshort-enums",
+      "-fdefer-ts"
     ],
     "directory": "/home/lain/git/system-sexp/src",
     "output": "ssi"

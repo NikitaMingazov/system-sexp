@@ -1,15 +1,20 @@
 dump host preprocessor with:
 gcc -dM -E - < /dev/null
 primitive fns:
-preprocessor-default, stdin, stderr, stdout, errno, getenv
+preprocessor-default, errno, getenv
 fprintf and primitives
 
-as root is a progn, (export sym1 sym2) as the last line is equal to
-'((mangle-inner (sym1 (eval (sym1))
-  (mangle-inner (sym2 (eval sym2))))
-and (import module.ss sym1) as filtering the export would work
+eval fn spot, a macro is something that evals into macro-body
+redefine eval to handle it differently for a lisp-2
 
-rename primitives to intrinsics and interpreter to runtime
+fix memory usage and leaks, then rewrite in C++
+
+make sym a u16 u8 pair
+
+as root is a progn, (export sym1 sym2) as the last line is equal to
+'((mangle-inner sym1)
+  (mangle-inner sym2))
+and (import module.ss sym1) as filtering the export would work
 
 use cmph for the primitives
 

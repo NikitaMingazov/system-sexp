@@ -4,7 +4,7 @@
 ;    (p-st-set 1 (p-deref argv)))
 
 (p-let let p-let)
-(let sexp-size (p-sexp_size))
+(let sexp-size (p-sexp-size))
 (let typeof p-typeof)
 ; typeof results
 (let :symbol 1)
@@ -31,7 +31,7 @@
 (let eval-2
   '(()
     (p-macrobody (_ argv)
-                 (p-multi_eval
+                 (p-multi-eval
                    (\ argv)
                    ()
                    ()))))
@@ -55,7 +55,7 @@
 ; top-level
 ; (let eval
 ;   '(()
-;     (p-macrobody (_ argv)
+;     (p-macrobody (- argv)
 ;                  (p-print "Called eval on:\n  ")
 ;                  (p-print (p-format ([] argv 0)))
 ;                  (p-print "\n in repl: type y to go into children, n to not\n")
@@ -70,28 +70,26 @@
   '(()
     (p-macrobody (argc argv)
                  (let first (eval-arg argv 0))
-                 (eval-2
-                   (p-if (p-ulte argc 1)
-                     first  ; end of args, return last
-                     (p-slice_eval progn  ; more args, recurse
-                                    (u- argc 1)
-                                    (u+ argv sexp-size)))))))
+                 (p-if (p-ulte argc 1)
+                    first  ; end of args, return last
+                    (p-slice-eval progn  ; more args, recurse
+                                  (u- argc 1)
+                                  (u+ argv sexp-size))))))
 
 (let print
   '(()
     (p-macrobody (argc argv)
-                 (eval-2
-                   (p-if (u> argc 0)
-                     (progn (p-print (p-format (eval-arg argv 0)))
-                            (p-slice_eval print
-                                          (u- argc 1)
-                                          (u+ argv sexp-size)))
-                     ())))))
+                 (p-if (u> argc 0)
+                   (progn (p-print (p-format (eval-arg argv 0)))
+                          (p-slice-eval print
+                                        (u- argc 1)
+                                        (u+ argv sexp-size)))
+                   ()))))
 
 (let println
   '(()
     (p-macrobody (argc argv)
-                 (p-slice_eval print argc argv)
+                 (p-slice-eval print argc argv)
                  (print "\n"))))
 
 (println

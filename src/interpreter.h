@@ -55,7 +55,8 @@ void print_trace(CallTree *call);
 
 int calltree_set_symbol_val(CallTree *at, const lps sym, Sexp val);
 Sexp calltree_remove_symbol_val(CallTree *at, const lps sym);
-Sexp *calltree_get_symbol_val_ref(CallTree *at, const lps sym);
+Sexp *calltree_get_symbol_val_ref_walk_up(CallTree *at, const lps sym);
+Sexp *calltree_get_symbol_val_ref_no_walk(CallTree *at, const lps sym);
 // allocates into the arena
 void *calltree_alloc(CallTree *at, size_t size);
 

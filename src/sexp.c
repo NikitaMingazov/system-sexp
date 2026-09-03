@@ -1,10 +1,12 @@
 #include "sexp.h"
+#include "allocators/std-alloc.h"
 #include "buffer.h"
 #include "include/arena.h"
 #include "interpreter.h"
 #include "lps.h"
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,6 +52,8 @@ void* sexp_read_ptr(Sexp s) {
 	return s.qword.atom.as_ptr;
 }
 lps sexp_read_str(Sexp s) {
+	if (!(sexp_atom_type(s) == A_STR || sexp_atom_type(s) == A_SYM))
+		fprintf(stderr, "for sexp |"LPS_Fmt"|", LPS_Arg(sexp_format(s)));
 	assert(sexp_atom_type(s) == A_STR || sexp_atom_type(s) == A_SYM);
 	return s.qword.atom.as_str;
 }
@@ -83,6 +87,7 @@ Sexp sexp_new_atom_##FSUFFIX(TYPE value, CallTree *at) { \
 	return atom_new((union atom_val)value, DISCRIMINANT, row, col); \
 }
 
+SEXP_ATOM_BUILDER(sym, lps, A_SYM)
 SEXP_ATOM_BUILDER(str, lps, A_STR)
 SEXP_ATOM_BUILDER(ptr, void*, A_PTR)
 SEXP_ATOM_BUILDER(uint, uintptr_t, A_UVAL)
@@ -138,7 +143,7 @@ void sexp_destroy(Sexp sexp) {
 		free(sexp_children(sexp));
 	} else {
 		if (sexp_atom_type(sexp) == A_STR)
-			lps_free(sexp.qword.atom.as_str);
+			lps_free(sexp.qword.atom.as_str, std_allocator());
 	}
 }
 
@@ -206,7 +211,7 @@ void sexp_format_into_buffer(const Sexp s, Buffer *buf) {
 			buffer_append_chars(buf, tmp, len);
 			free(tmp);
 		} break;
-		case A_NULL: {} abort();
+		case A_NULL: { buffer_append_chars(buf, "(NULL)", 6); } break;
 		}
 	}
 }
@@ -214,7 +219,7 @@ void sexp_format_into_buffer(const Sexp s, Buffer *buf) {
 lps sexp_format(const Sexp sexp) {
 	Buffer *stringbuilder = buffer_new();
 	sexp_format_into_buffer(sexp, stringbuilder);
-	lps new = lps_with_reserved_len(stringbuilder->len);
+	lps new = lps_with_reserved_len(stringbuilder->len, std_allocator());
 	memcpy(new, stringbuilder->data, stringbuilder->len);
 	buffer_free(stringbuilder);
 	return new;

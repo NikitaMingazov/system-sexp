@@ -2,6 +2,7 @@
 // the build process parses this file to generate the default primitive initialisation
 // so extending the language by appending something here is trivial
 
+#include "allocators/std-alloc.h"
 #include "include/nob.h"
 #include "lps.h"
 #include "primitives.h"
@@ -9,7 +10,17 @@
 #include "sexp.h"
 #include "reader.h"
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#include <stddefer.h>
+
+#ifdef DEBUG
+#define LOG(X) X
+#else
+#define LOG(X)
+#endif
 
 // macros are first-class, functions are not (this is a "fexpr" language)
 // functions are implemented in terms of macros in the preamble
@@ -46,6 +57,7 @@ static Sexp *replace_symbol(Sexp *macrobody, lps replaced_symbol, Sexp val) {
 				*cur = val;
 		}
 	}
+	nob_da_free(to_check);
 	return macrobody;
 }
 
@@ -64,35 +76,58 @@ Sexp prim_name(size_t argc, Sexp *argv, Interpreter *I, CallTree *at)
 		calltree_destroy(*child, &I->arenapool); \
 	} \
 
+// returns the source-level parent call, skipping intermediate calls
 static CallTree *parent_ctx(CallTree *at) {
-	CallTree *parent = at->parent->parent->parent->parent;
-	Sexp called_by = sexp_children(*parent->state.sexp_called)[0];
-	while (!called_by.is_list && sexp_atom_type(called_by) == A_SYM && lps_cmp(sexp_read_str(called_by), lps_from_cstr("eval")) == 0) {
+	CallTree *parent = at->parent;
+	Sexp called_by;
+try_parent:
+		called_by = sexp_num_children(*parent->state.sexp_called) > 0
+			? sexp_children(*parent->state.sexp_called)[0]
+			: sexp_new_list(at);
+		while (!called_by.is_list && sexp_atom_type(called_by) == A_SYM && lps_cmp(sexp_read_str(called_by), lps_from_cstr("eval", std_allocator())) == 0) {
+			parent = parent->parent;
+			goto try_parent;
+		}
 		parent = parent->parent;
-	}
 	return parent;
 }
 
 // execution fundamentals =============================================================
 
+LOG(uint call_depth = 0;)
 // the primitive form of eval
 // S -> S
 DEFINE_PRIMITIVE("p-exec", p_exec) {
 	assert(argc == 1);
+	LOG(++call_depth;)
+	LOG(fprintf(stderr, "%*s", call_depth, " ");)
+	LOG(fprintf(stderr, "Called exec on "LPS_Fmt"\n", LPS_Arg(sexp_format(argv[0])));)
 	// atom: fetch symbol, do nothing for literals
 	if (!argv[0].is_list) {
 		switch (sexp_atom_type(argv[0])) {
 		case A_SYM: {
 			if (primitives_contains_macro(I->prims, sexp_read_str(argv[0]))) {
+				Sexp rval = argv[0];
+				LOG(fprintf(stderr, "%*s", call_depth, " ");)
+				LOG(--call_depth;)
+				LOG(fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(rval)));)
 				return argv[0];
 			}
-			if (!calltree_get_symbol_val_ref(at, sexp_read_str(argv[0]))) {
-				fprintf(stderr, "p-exec: could not find symbol "LPS_Fmt"\n", LPS_Arg(sexp_read_str(argv[0])));
+			if (!calltree_get_symbol_val_ref_walk_up(at, sexp_read_str(argv[0]))) {
+				fprintf(stderr, "p-exec: could not find symbol |"LPS_Fmt"|\n", LPS_Arg(sexp_read_str(argv[0])));
 				abort();
 			}
-			return *calltree_get_symbol_val_ref(at, sexp_read_str(argv[0]));
+			Sexp rval = *calltree_get_symbol_val_ref_walk_up(at, sexp_read_str(argv[0]));
+			LOG(fprintf(stderr, "%*s", call_depth, " ");)
+			LOG(--call_depth;)
+			LOG(fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(rval)));)
+			return *calltree_get_symbol_val_ref_walk_up(at, sexp_read_str(argv[0]));
 		} break;
 		default: {
+			Sexp rval = argv[0];
+			LOG(fprintf(stderr, "%*s", call_depth, " ");)
+			LOG(--call_depth;)
+			LOG(fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(rval)));)
 			return argv[0];
 		} abort();
 		}
@@ -100,6 +135,11 @@ DEFINE_PRIMITIVE("p-exec", p_exec) {
 	Sexp *children = sexp_children(argv[0]);
 	size_t num_children = sexp_num_children(argv[0]);
 	// (p-exec ()) returns ()
+	LOG(if (num_children == 0) {
+		LOG(fprintf(stderr, "%*s", call_depth, " ");)
+		LOG(--call_depth;)
+		fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(argv[0])));
+	})
 	if (num_children == 0)
 		return argv[0];
 	// TODO: macro literal support (eval this rather than look in symboltable)
@@ -114,21 +154,19 @@ DEFINE_PRIMITIVE("p-exec", p_exec) {
 		                        (I->prims, macro_str)
 		                        (child_argc, child_argv, I, call));
 		calltree_destroy(*call, &I->arenapool);
+		LOG(fprintf(stderr, "%*s", call_depth, " ");)
+		LOG(--call_depth;)
+		LOG(fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(result)));)
 		return result;
 	} else {
-		// (p-st-push name
-		//   (()
-		//    ((argc_bind argv_bind)
-		//     (S0 (\ p-st-peek argc_bind))
-		//     (S1 (\ p-st-peek argv_bind)))))
-		// the body is interpreted as a progn
-		// unwrapping symbol
 		// (() name) defines a macro in the symboltable
-		Sexp *st_entry = calltree_get_symbol_val_ref(at, macro_str);
+		Sexp *st_entry = calltree_get_symbol_val_ref_walk_up(at, macro_str);
 		if (!st_entry) {
 			fprintf(stderr, "p-exec: could not find symbol "LPS_Fmt"\n", LPS_Arg(macro_str));
 			abort();
 		}
+		LOG(fprintf(stderr, "%*s", call_depth, " ");)
+		LOG(fprintf(stderr, "macro symbol value: "LPS_Fmt"\n", LPS_Arg(sexp_format(*st_entry)));)
 		// primitive macros as symbols evaluate to themselves, if something returned one from the symboltable
 		// that is symbol is an alias of a macro, be it a prim symbol or a list
 		if (!st_entry->is_list && sexp_atom_type(*st_entry) == A_SYM) {
@@ -140,6 +178,9 @@ DEFINE_PRIMITIVE("p-exec", p_exec) {
 				                        (I->prims, sexp_read_str(*st_entry))
 		                                (child_argc, child_argv, I, call));
 				calltree_destroy(*call, &I->arenapool);
+				LOG(fprintf(stderr, "%*s", call_depth, " ");)
+				LOG(--call_depth;)
+				LOG(fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(result)));)
 				return result;
 			} else {
 				abort();
@@ -149,7 +190,9 @@ DEFINE_PRIMITIVE("p-exec", p_exec) {
 		assert(sexp_num_children(*st_entry) == 2);
 		Sexp st_val = st_children[1];
 		assert(sexp_num_children(st_val) >= 2);
-		assert(lps_cmp(sexp_read_str(sexp_children(st_val)[0]), lps_from_cstr("p-macrobody")) == 0);
+		assert(lps_cmp(sexp_read_str(sexp_children(st_val)[0]),
+		               lps_from_cstr("p-macrobody", std_allocator())
+					  ) == 0);
 		Sexp arg_binds = sexp_children(st_val)[1];
 		assert(arg_binds.is_list);
 		assert(sexp_num_children(arg_binds) == 2);
@@ -162,17 +205,43 @@ DEFINE_PRIMITIVE("p-exec", p_exec) {
 		lps argv_bind_to = sexp_read_str(sexp_children(arg_binds)[1]);
 		replace_symbol(replace_symbol(alloced_macro, argc_bind_to, argc_node), argv_bind_to, argv_node);
 		if (!sexp_is_null(at->state.call_results[0])) {
+			LOG(fprintf(stderr, "%*s", call_depth, " ");)
+			LOG(--call_depth;)
+			LOG(fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(at->state.call_results[0])));)
 			return at->state.call_results[0];
 		} else {
 			Sexp result = sexp_dup(p_exec(1, alloced_macro, I, child_call));
 			calltree_destroy(*child_call, &I->arenapool);
+			LOG(fprintf(stderr, "%*s", call_depth, " ");)
+			LOG(--call_depth;)
+			LOG(fprintf(stderr, "Returned "LPS_Fmt"\n", LPS_Arg(sexp_format(result)));)
 			return result;
 		}
 	}
 }
 
+// takes the environment as a parameter
+// first evals arg 0 in this environment, then the target one
+// third arg is unused, is used to store result
+// (S, CallTree*, ()) -> S
+DEFINE_PRIMITIVE("p-eval-at", p_eval_at) {
+	assert(argc == 2);
+	EVAL(to_eval, 0)
+	EVAL(env, 1)
+	// EVAL(result, 2) unwrapped and tweaked
+	Sexp result;
+	if (!sexp_is_null(at->state.call_results[2])) {
+		result = at->state.call_results[2];
+	} else {
+		CallTree *child = calltree_child_at(sexp_read_ptr(env), &to_eval, 1, 2, &I->arenapool);
+		result = eval(to_eval, I, child);
+		calltree_destroy(*child, &I->arenapool);
+	};
+	return result;
+}
+
 // calls eval with its args as two sexps corresponding to ptr and length of eval args
-// (sym size_t Sexp*) -> S
+// (fn size_t Sexp*) -> S
 DEFINE_PRIMITIVE("p-slice-eval", p_slice_eval) {
 	assert(argc == 3);
 	EVAL(slice_len, 1)
@@ -187,7 +256,7 @@ DEFINE_PRIMITIVE("p-slice-eval", p_slice_eval) {
 
 // S* -> S
 // progn but first arg is (argc argv) which is used text substition when called
-DEFINE_PRIMITIVE("p-macrobody", macrobody) {
+DEFINE_PRIMITIVE("p-macrobody", p_macrobody) {
 	assert(argc > 1);
 	Sexp cur;
 	for (size_t i = 1; i < argc; ++i) {
@@ -222,21 +291,9 @@ DEFINE_PRIMITIVE("p-multi-eval", p_multi_eval) {
 }
 
 // lisp-inspired/misc =====================================================
-// () -> S
-DEFINE_PRIMITIVE("p-read", p_read) {
-	assert(argc == 0);
-	Sexp s = reads(I);
-	if (sexp_is_null(s)) {
-		// TODO: message passing
-		if (!I->error_flags) {
-			exit(0);
-		} else {
-			exit(1);
-		}
-	}
-	return s;
-}
 
+// TODO take in file arg
+// // (str, FILE*) -> ()
 // str -> ()
 DEFINE_PRIMITIVE("p-print", p_print) {
 	assert(argc == 1);
@@ -258,17 +315,64 @@ DEFINE_PRIMITIVE("p-is-primitive", p_is_primitive) {
 	return sexp_new_atom_int(result_v, at);
 }
 // symboltable primitives ===================================================
-// TODO
-// // (str S) -> ()
-// DEFINE_PRIMITIVE("p-st-set", p_symboltable_set)
-// // str -> S
-// DEFINE_PRIMITIVE("p-st-remove", p_symboltable_remove)
-// // str -> S
-// DEFINE_PRIMITIVE("p-st-get", p_symboltable_get)
+
+// (CallTree* sym S) -> ()
+DEFINE_PRIMITIVE("p-st-set", p_symboltable_set) {
+	assert(argc == 3);
+	EVAL(call, 0)
+	EVAL(sym, 1)
+	EVAL(val, 2)
+	calltree_set_symbol_val(sexp_read_ptr(call), sexp_read_str(sym), val);
+	return sexp_new_list(at);
+}
+// (CallTree* sym) -> ()
+DEFINE_PRIMITIVE("p-st-remove", p_symboltable_remove) {
+	assert(argc == 2);
+	EVAL(call, 0)
+	EVAL(sym, 1)
+	calltree_remove_symbol_val(sexp_read_ptr(call), sexp_read_str(sym));
+	return sexp_new_list(at);
+}
+// (CallTree* sym) -> S*
+DEFINE_PRIMITIVE("p-st-get", p_symboltable_get) {
+	assert(argc == 2);
+	EVAL(call, 0)
+	EVAL(sym, 1)
+	Sexp *adr = calltree_get_symbol_val_ref_no_walk(sexp_read_ptr(call), sexp_read_str(sym));
+	return sexp_new_atom_ptr(adr, at);
+}
+
+// returns a ptr to the env it was called from
+// () -> void*
+DEFINE_PRIMITIVE("p-scope", p_path_at) {
+	assert(argc == 0);
+	return sexp_new_atom_ptr(parent_ctx(at), at);
+}
+
+// TODO: walk until macrobody?
+// second arg is for levels up to go
+// (CallTree* uint) -> CallTree*
+DEFINE_PRIMITIVE("p-parent-scope", p_path_of_parent) {
+	assert(argc == 2);
+	EVAL(scope, 0)
+	EVAL(layers, 1)
+	CallTree *parent = sexp_read_ptr(scope);
+	for (int i = 0; i < sexp_read_u64(layers); ++i)
+		parent = parent_ctx(parent);
+	return sexp_new_atom_ptr(parent, at);
+}
+
+// () -> CallTree*
+DEFINE_PRIMITIVE("p-root-scope", p_root) {
+	assert(argc == 0);
+	return sexp_new_atom_ptr(I->call_root, at);
+}
+
 // (sym S) -> *S
 DEFINE_PRIMITIVE("p-set", p_set) {
 	assert(argc == 2);
 	EVAL(sym, 0)
+	// Sexp sym = argv[0];
 	EVAL(val, 1)
 	int err = calltree_set_symbol_val(
 	                                  I->call_root,
@@ -278,51 +382,33 @@ DEFINE_PRIMITIVE("p-set", p_set) {
 	assert(!err);
 	return val;
 }
-// (str, S) -> S
-DEFINE_PRIMITIVE("p-let", p_let) {
-	assert(argc == 2);
-	EVAL(val, 1)
-	int err = calltree_set_symbol_val(
-	                                  parent_ctx(at),
-                                      sexp_read_str(argv[0]),
-                                      sexp_dup(val)
-	                                 );
-	assert(!err);
-	return val;
-}
 // str -> &mut S
 DEFINE_PRIMITIVE("p-get", p_get) {
 	assert(argc == 1);
 	EVAL(val, 0)
-	return sexp_new_atom_ptr(calltree_get_symbol_val_ref(at, sexp_read_str(val)), at);
-}
-
-// () -> void*
-DEFINE_PRIMITIVE("p-ctx", p_path_at) {
-	assert(argc == 0);
-	return sexp_new_atom_ptr(at, at);
+	return sexp_new_atom_ptr(calltree_get_symbol_val_ref_walk_up(at, sexp_read_str(val)), at);
 }
 
 // S -> ()
 DEFINE_PRIMITIVE("p-sendmsg", p_sendmsg) {
 	assert(argc == 1);
-	Sexp *msg = malloc(sizeof(Sexp));
-	memcpy(msg, argv, sizeof(Sexp));
-	slave_send_msg(I->parent_channel, msg);
+	Sexp *out = malloc(sizeof(Sexp));
+	*out = sexp_dup(argv[0]);
+	slave_send_msg(I->parent_channel, out);
 	return sexp_new_list(at);
 }
 // () -> S
 DEFINE_PRIMITIVE("p-awaitmsg", p_awaitmsg) {
 	assert(argc == 0);
-	Sexp msg;
 	Sexp *in = slave_await_msg(I->parent_channel);
-	memcpy(&msg, in, sizeof(Sexp));
+	Sexp msg = *in;
 	free(in);
 	return msg;
 }
 
 // Sexp API ===============================================
 
+// converts a sexp into a printable string (maybe should not actually be primitive)
 // S -> str
 DEFINE_PRIMITIVE("p-format", p_format) {
 	assert(argc == 1);
@@ -330,21 +416,24 @@ DEFINE_PRIMITIVE("p-format", p_format) {
 	return sexp_new_atom_str(sexp_format(a), at);
 }
 
-// S -> u64
+// returns length of a list
+// list -> u64
 DEFINE_PRIMITIVE("p-length", p_length) {
 	assert(argc == 1);
 	EVAL(list, 0)
 	return sexp_new_atom_uint(sexp_num_children(list), at);
 }
 
+// returns a pointer to the nth element of a list
 // (S, u64) -> S*
 DEFINE_PRIMITIVE("p-nth", p_nth) {
 	assert(argc == 2);
 	EVAL(list, 0)
-	EVAL(index, 0)
+	EVAL(index, 1)
 	return sexp_new_atom_ptr(&sexp_children(list)[sexp_read_u64(index)], at);
 }
 
+// creates a list from an array of sexps and its length
 // (Sexp* size_t) -> List
 DEFINE_PRIMITIVE("p-list", p_list) {
 	assert(argc == 2);
@@ -356,6 +445,8 @@ DEFINE_PRIMITIVE("p-list", p_list) {
 	return result;
 }
 
+// replaces symbols recursively found in a sexp with an evaluated form
+// (S, symbol, S) -> S
 DEFINE_PRIMITIVE("p-replace", p_replace) {
 	assert(argc == 3);
 	EVAL(body, 0)
@@ -376,6 +467,8 @@ DEFINE_PRIMITIVE("p-typeof", p_typeof) {
 }
 
 // Sexp memory primitives =================================================
+
+// given a sexp, returns a pointer to it
 // S -> S*
 DEFINE_PRIMITIVE("p-adrof", p_adrof) {
 	assert(argc == 1);
@@ -384,6 +477,8 @@ DEFINE_PRIMITIVE("p-adrof", p_adrof) {
 	*result = val;
 	return sexp_new_atom_ptr(result, at);
 }
+
+// given a pointer to a sexp, returns the sexp at the address
 // S* -> S
 // TODO: possibly remove this, replace with alloca+memcpy in ss
 DEFINE_PRIMITIVE("p-deref", p_deref) {
@@ -391,6 +486,9 @@ DEFINE_PRIMITIVE("p-deref", p_deref) {
 	EVAL(ptr, 0)
 	return * (Sexp*) sexp_read_ptr(ptr);
 }
+
+// returns the size of a sexp in memory, in bytes
+// needed because I may use a NaN-packed implementation
 // () -> size_t
 DEFINE_PRIMITIVE("p-sexp-size", p_sexp_size) {
 	assert(argc == 0);
@@ -401,6 +499,7 @@ DEFINE_PRIMITIVE("p-sexp-size", p_sexp_size) {
 // an unstable lps is used as a string representation, this is its api
 // (the other methods are reducible with memcpy etc.)
 
+// given a str, returns the length of its payload
 // str -> size_t
 DEFINE_PRIMITIVE("p-strlen", p_strlen) {
 	assert(argc == 1);
@@ -408,25 +507,163 @@ DEFINE_PRIMITIVE("p-strlen", p_strlen) {
 	size_t result_v = lps_len(sexp_read_str(str));
 	return sexp_new_atom_uint(result_v, at);
 }
+
+// given a length, create a string of its length, with an uninitialised payload
 // memcpy the bytes into the blank one from this
 // this uses malloc, so the user needs to free afterwards
+// TODO: custom allocator
 // size_t -> str
 DEFINE_PRIMITIVE("p-uninit-str", p_uninit_str_from_len) {
 	assert(argc == 1);
 	EVAL(a, 0)
-	lps result_v = lps_with_reserved_len(sexp_read_u64(a));
+	lps result_v = lps_with_reserved_len(sexp_read_u64(a), std_allocator());
 	Sexp result = sexp_new_atom_str(result_v, at);
 	return result;
 }
+
+// frees a length-prefixed-string
 // str -> ()
 DEFINE_PRIMITIVE("p-str-free", p_str_free) {
 	assert(argc == 1);
 	EVAL(a, 0)
-	lps_free(sexp_read_str(a));
+	lps_free(sexp_read_str(a), std_allocator());
 	return sexp_new_list(at);
 }
 
-// C-semantics primitives ===============================================
+// IO / C-semantics primitives ===============================================
+
+// reads a sexp from the interpreter's in-stream
+// () -> S
+DEFINE_PRIMITIVE("p-read", p_read) {
+	assert(argc == 0);
+	Sexp s = reads(I, 1);
+	if (sexp_is_null(s)) {
+		// TODO: message passing
+		if (I->error_flags) {
+			abort();
+		}
+	}
+	return s;
+}
+
+// executes all of the sexps in a file as if at the current location
+// str -> S
+DEFINE_PRIMITIVE("p-load", p_load) {
+	EVAL(path, 0)
+	char* path_cstr = lps_to_cstr(sexp_read_str(path), std_allocator());
+	defer { free(path_cstr); }
+	FILE* src = fopen(path_cstr, "r");
+	assert(src);
+	defer { fclose(src); }
+	// set interpreter's input to the opened file
+	FILE* prev_src = I->in_stream;
+	I->in_stream = src;
+	defer { I->in_stream = prev_src; }
+	Sexp result;
+	while (1) {
+		Sexp cur = reads(I, true);
+		if (sexp_is_null(cur)) {
+			if (I->error_flags != ERR_NONE)
+				abort();
+			break;
+		}
+		result = eval(cur, I, parent_ctx(at));
+	}
+	return result;
+}
+
+// returns 1 if p-read returned null, 0 otherwise
+// S -> Bint
+DEFINE_PRIMITIVE("p-is-eof", p_is_eof) {
+	assert(argc == 1);
+	EVAL(a, 0)
+	return sexp_new_atom_int(sexp_is_null(a), at);
+}
+
+extern char **environ;
+
+// returns a pointer to the environment variables
+// () -> char**
+DEFINE_PRIMITIVE("p-environ", p_getenv) {
+	// for (char **envar = environ; *envar != NULL; envar++) {
+        // printf("%s\n", *envar);
+    // }
+	assert(argc == 0);
+	return sexp_new_atom_ptr(environ, at);
+}
+
+// returns the interpreter's current source
+// TODO: wrapper obj for distributed-agnosticism () -> chariter*
+// () -> FILE*
+DEFINE_PRIMITIVE("p-get-in", p_get_in) {
+	assert(argc == 0);
+	return sexp_new_atom_ptr(I->in_stream, at);
+}
+
+// sets the interpreter's current source, returning the previous one
+// returns previous in-iterator
+// FILE* -> FILE*
+DEFINE_PRIMITIVE("p-set-in", p_set_in) {
+	assert(argc == 1);
+	EVAL(new, 0)
+	void* old = I->in_stream;
+	I->in_stream = sexp_read_ptr(new);
+	return sexp_new_atom_ptr(old, at);
+}
+
+// returns the runtime's stdin
+// () -> FILE*
+DEFINE_PRIMITIVE("p-stdin", p_stdin) {
+	assert(argc == 0);
+	return sexp_new_atom_ptr(stdin, at);
+}
+
+// returns the runtime's stdout
+// () -> FILE*
+DEFINE_PRIMITIVE("p-stdout", p_stdout) {
+	assert(argc == 0);
+	return sexp_new_atom_ptr(stdout, at);
+}
+
+// returns the runtime's stderr
+// () -> FILE*
+DEFINE_PRIMITIVE("p-stderr", p_stderr) {
+	assert(argc == 0);
+	return sexp_new_atom_ptr(stderr, at);
+}
+
+// C binding
+// (str, str) -> FILE*
+DEFINE_PRIMITIVE("p-fopen", p_fopen) {
+	assert(argc == 2);
+	EVAL(filename, 0)
+	EVAL(mode, 1)
+	char *a_cstr = lps_to_cstr(sexp_read_str(filename), std_allocator());
+	defer { free(a_cstr); }
+	char *b_cstr = lps_to_cstr(sexp_read_str(mode), std_allocator());
+	defer { free(b_cstr); }
+	Sexp result = sexp_new_atom_ptr(fopen(a_cstr, b_cstr), at);
+	return result;
+}
+
+// C binding
+// FILE* -> ()
+DEFINE_PRIMITIVE("p-fclose", p_fclose) {
+	assert(argc == 1);
+	EVAL(a, 0)
+	fclose(sexp_read_ptr(a));
+	return sexp_new_list(at);
+}
+
+// arena allocation with the lifetime of the provided reference
+// (CallTree*, Bu) -> void*
+DEFINE_PRIMITIVE("p-ct-alloc", p_ct_alloc) {
+	assert(argc == 2);
+	EVAL(a, 0)
+	EVAL(b, 1)
+	void *result_v = calltree_alloc(sexp_read_ptr(a), sexp_read_u64(b));
+	return sexp_new_atom_ptr(result_v, at);
+}
 
 #define DEFINE_UNARY_FN(IGNORE, NAME, FN, IN_TYPE, READAS, OUT_ATOM) \
 Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) { \
@@ -476,14 +713,6 @@ DEFINE_PRIMITIVE("p-realloc", p_realloc) {
 }
 
 // Bu -> void*
-DEFINE_PRIMITIVE("p-alloca", p_alloca) {
-	assert(argc == 1);
-	EVAL(a, 0)
-	void *result_v = calltree_alloc(parent_ctx(at), sexp_read_u64(a));
-	return sexp_new_atom_ptr(result_v, at);
-}
-
-// Bu -> void*
 DEFINE_UNARY_FN("p-malloc", p_malloc, malloc, size_t, u64, ptr)
 // (void* void* Bu) -> Bint
 DEFINE_TERNARY_FN("p-memcmp", p_memcmp, memcmp, void*, ptr, void*, ptr, size_t, u64, int, int)
@@ -492,9 +721,9 @@ DEFINE_TERNARY_FN("p-memcpy", p_memcpy, memcpy, void*, ptr, void*, ptr, size_t, 
 // (void* Bint Bu) -> void*
 DEFINE_TERNARY_FN("p-memset", p_memset, memset, void*, ptr, int, s64, size_t, u64, void*, ptr)
 
-// returns the taken branch
+// executes the taken branch, ignoring the other
 // third arg is optional, () is used if it is absent
-// (Bint S S) -> S
+// (Bint S S?) -> S
 DEFINE_PRIMITIVE("p-if", p_if) {
 	assert(argc == 2 || argc == 3);
 	EVAL(cond, 0)
@@ -506,8 +735,12 @@ DEFINE_PRIMITIVE("p-if", p_if) {
 		branch = t_branch;
 	else
 		branch = f_branch;
-	return sexp_dup(branch);
+	CallTree *child = calltree_child_at(at, &argv[0], 1, 1, &I->arenapool);
+	Sexp result = p_exec(1, &branch, I, child);
+	calltree_destroy(*child, &I->arenapool);
+	return sexp_dup(result);
 }
+
 // returns the final expr's result
 // does not use a dispatcher, performs the loop in C
 // (Bint S) -> S
@@ -518,19 +751,22 @@ DEFINE_PRIMITIVE("p-while", p_while) {
 		EVAL(cond, 0)
 		if (!sexp_read_s64(cond))
 			break;
+		// wipe body state for the iteration
+		memset(
+		        at->state.call_results+sizeof(Sexp),
+		        0,
+		        (at->state.num_call_results-1) * sizeof(Sexp)
+		      );
 		for (size_t i = 1; i < argc; ++i) {
 			if (i+1 < argc) {
 				EVAL(ignored, i)
 			} else {
-				EVAL(result, i)
+				EVAL(val, i)
+				result = val;
 			}
 		}
-		// after the iteration, wipe eval state for the next
-		memset(
-		        at->state.call_results,
-		        0,
-		        at->state.num_call_results * sizeof(Sexp)
-		      );
+		// wipe cond state for the iteration
+		at->state.call_results[0] = sexp_null();
 	}
 	return sexp_dup(result);
 }
@@ -594,7 +830,7 @@ Sexp NAME(size_t argc, Sexp *argv, Interpreter *I, CallTree *at) { \
 // Bint -> Bint
 DEFINE_UNARY_OP("p-not", p_not, !, int, s64, int, int)
 // (B B) -> Bint
-DEFINE_BINARY_OP("p-biteq", p_biteq, ==, uintptr_t, u64, int, int) // technically UB union usage
+DEFINE_BINARY_OP("p-biteq", p_biteq, ==, uintptr_t, u64, int, int)
 DEFINE_BINARY_OP("p-bitneq", p_bitneq, !=, uintptr_t, u64, int, int)
 // (B B) -> Bu
 DEFINE_BINARY_OP("p-bitand", p_bitand, &, uintptr_t, u64, uintptr_t, uint)

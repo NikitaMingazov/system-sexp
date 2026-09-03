@@ -1,4 +1,5 @@
 
+#include "allocators/std-alloc.h"
 #include "include/arena.h"
 
 #include "interpreter.h"
@@ -13,6 +14,7 @@
 #include "readtable.h"
 #include "primitives_t.h"
 #include <pthread.h>
+#include <stddefer.h>
 #include <threads.h>
 #include <setjmp.h>
 #include <stdint.h>
@@ -20,6 +22,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// define static lps strings (special symbols)
+// assign to this to break dynamic scoping by designating a parent node to look for symbols in
+static const char lps_env_body[] = { 3, 'e', 'n', 'v' };
+static const lps LPS_ENV = (lps) (lps_env_body+1);
+// the top-level execution function (wraps top-level expressions)
+static const char lps_eval_body[] = { 4, 'e', 'v', 'a', 'l' };
+static const lps LPS_EVAL = (lps) (lps_eval_body+1);
 
 #define LOG(X)
 
@@ -72,8 +82,8 @@ void interpreter_set_stream(Interpreter *I, FILE *in_stream) {
 // void interpreter_set_root_symboltable(Interpreter *I, Symboltable *st);
 
 int calltree_set_symbol_val(CallTree *at, const lps sym, Sexp val) {
-	if (calltree_get_symbol_val_ref(at, sym))
-		LOG(fprintf(stderr, "shadowed "LPS_Fmt"\n", LPS_Arg(sym)));
+	// if (calltree_get_symbol_val_ref(at, sym))
+	// 	LOG(fprintf(stderr, "shadowed "LPS_Fmt"\n", LPS_Arg(sym)));
 	// parent's lifetime exceeds child
 	if (at->parent)
 		return symboltable_set(at->state.symboltable, sym, val, &at->parent->state.memory);
@@ -87,14 +97,23 @@ Sexp calltree_remove_symbol_val(CallTree *at, const lps sym) {
 	}
 	return symboltable_remove(at->state.symboltable, sym);
 }
-Sexp *calltree_get_symbol_val_ref(CallTree *at, const lps sym) {
+Sexp *calltree_get_symbol_val_ref_walk_up(CallTree *at, const lps sym) {
 	CallTree *cursor = at;
 	while (cursor && !symboltable_get_ref(cursor->state.symboltable, sym)) {
-		cursor = cursor->parent;
+		// to implement lexical scoping, asign env to a CallTree* other than the call parent to
+		// search for symbol values in
+		Sexp *env_ref = symboltable_get_ref(cursor->state.symboltable, LPS_ENV);
+		if (env_ref)
+			cursor = sexp_read_ptr(*env_ref);
+		else
+			cursor = cursor->parent;
 		if (!cursor)
 			return NULL;
 	}
 	return symboltable_get_ref(cursor->state.symboltable, sym);
+}
+Sexp *calltree_get_symbol_val_ref_no_walk(CallTree *at, const lps sym) {
+	return symboltable_get_ref(at->state.symboltable, sym);
 }
 void *calltree_alloc(CallTree *at, size_t size) {
 	return arena_alloc(&at->state.memory, size);
@@ -124,7 +143,7 @@ Interpreter *interpreter_new(const Primitives *prims, uint num_threads) {
 	// initialise eval to the primitive's default
 	Arena *root_arena = &new->call_root->state.memory;
 	Sexp default_eval = sexp_new_source_atom(prims->default_eval_binding, 0, 0);
-	calltree_set_symbol_val(new->call_root, lps_from_cstr("eval"), default_eval);
+	calltree_set_symbol_val(new->call_root, lps_from_cstr("eval", std_allocator()), default_eval);
 	return new;
 }
 
@@ -152,7 +171,7 @@ Sexp eval(Sexp to_eval, Interpreter *I, CallTree *at) {
 		LOG(fprintf(stderr, "   at "); print_trace(at);)
 	Sexp *with_eval = calltree_alloc(at, sizeof(Sexp));
 	*with_eval = sexp_new_list(at);
-	sexp_list_append(with_eval, sexp_new_atom_str(lps_from_cstr("eval"), at), &at->state.memory);
+	sexp_list_append(with_eval, sexp_new_atom_sym(LPS_EVAL, at), &at->state.memory);
 	sexp_list_append(with_eval, to_eval, &at->state.memory);
 	// 1 is to eval the macro into
 	CallTree *child_call = calltree_child_at(at, with_eval, 1, 0, &I->arenapool);
@@ -193,7 +212,8 @@ void print_trace(CallTree *call) {
 		fprintf(stderr, "[%d]\n", call->origin_idx);
 		return;
 	}
-	uint idxs[call_count];
+	uint *idxs = malloc(sizeof(*idxs) * call_count);
+	defer free(idxs);
 	idxs[call_count-1] = call->origin_idx;
 	parent = call->parent;
 	for (size_t i = 1; i < call_count; ++i) {
@@ -228,7 +248,7 @@ next_job:
 		if (dispatcher_id == 0) {
 			Sexp *job_msg = slave_receive_msg_if_exists(job_queue);
 			if (!job_msg) {
-				Sexp next = reads(I);
+				Sexp next = reads(I, true);
 				// terminate on EOF/lexical error  TODO: lexical error handling
 				if (sexp_is_null(next)) {
 					Sexp *nil = malloc(sizeof(Sexp));

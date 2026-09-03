@@ -5,13 +5,13 @@
 
 #include "sexp.h"
 #include "interpreter.h"
-#include <stdio.h>
+#include <stdbool.h>
 
 // returns the next sexp in the interpreter's stream
 // returns sexp_null (no flag) if EOF reached
 // if parsing error (only mismatched parentheses) returns sexp_null and
 //  sets an error flag in the interpreter
-Sexp reads(Interpreter *I);
+Sexp reads(Interpreter *I, bool do_reader_macros);
 
 // reads a single char
 int readc(Interpreter *I);

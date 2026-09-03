@@ -1,0 +1,80 @@
+
+#include "interpreter.h"
+#include "master_slave_channel.h"
+#include "primitives.h"
+#include "sexp.h"
+
+#include <stdio.h>
+#include <string.h> // strdup, strlen
+#include <libgen.h> // dirname
+#include <unistd.h> // chdir
+
+// metaprogramming using ctime to read a file to a string at compile-time
+#{
+#include <libctt.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+ctt_str read_file(const char* path) {
+	FILE *f = fopen(path, "rb");
+	if (!f) return NULL;
+
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	rewind(f);
+
+	char *buf = malloc(size + 1);
+	if (!buf) { fclose(f); return NULL; }
+
+	fread(buf, 1, size, f);
+	buf[size] = '\0';
+	fclose(f);
+	ctt_return(buf);
+}
+}#
+const char *repl_str = $( ct_format("\"%s\"", ct_quote(read_file("./repl.ss"))) )$;
+
+int main(const int argc, const char **argv) {
+	const char *in_path = NULL;
+	for (int i = 1; i < argc; ++i) {
+		in_path = argv[i];
+		break;
+	}
+	// TODO: args after the .ss get passed into the interpreter
+	// const int child_argc = argc-1;
+	// const char **child_argv = argv+1;
+	// chdir to be relative to the input program
+	if (in_path) {
+		char *path_copy = strdup(in_path);
+		char *dir = dirname(path_copy);
+		if (chdir(dir) != 0) {
+			perror("chdir");
+			free(path_copy);
+			return 1;
+		}
+		free(path_copy);
+	}
+	if (!in_path)
+		fprintf(stderr, "no file provided, using builtin REPL\n");
+	FILE *stream = in_path ? fopen(in_path, "r")
+	                       : fmemopen((char*)repl_str, strlen(repl_str), "r");
+	if (!stream) {
+		// fmemopen on repl_str is assumed to never error
+		fprintf(stderr, "Could not open %s for reading\n", in_path);
+		return 1;
+	}
+	Interpreter *I = interpreter_new(primitives_default(), 1);
+	// TODO: make a Chariter to use here
+	interpreter_set_stream(I, stream);
+	// spawn a single interpreter with a single thread
+	// it executes asynchronously
+	ChannelPair *channel = interpreter_begin(I, NULL, NULL);
+	while (1) {
+		Sexp *msg = master_await_msg(channel);
+		if (sexp_is_nil(*msg))
+			break;
+	}
+	interpreter_free(I);
+	fclose(stream);
+	return 0;
+}

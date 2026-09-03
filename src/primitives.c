@@ -1,6 +1,7 @@
 // the language's intrinsics
 // I call them primitives because (p-name arg) is better than (i-name arg)
 // , as concerning these having a 'namespace'. also I is taken by "interpreter"
+#include "allocators/std-alloc.h"
 #define HT_IMPLEMENTATION
 #include "include/ht.h"
 
@@ -96,9 +97,9 @@ void primitives_unset_reader(Primitives *prims, char c) {
 
 Sexp quote_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 	Sexp quoted = sexp_new_source_list(row, col);
-	Sexp quote = sexp_new_source_atom(lps_from_cstr("p-quote"), row, col);
+	Sexp quote = sexp_new_source_atom(lps_from_cstr("p-quote", std_allocator()), row, col);
 	sexp_list_append(&quoted, quote, &I->call_root->state.memory);
-	sexp_list_append(&quoted, reads(I), &I->call_root->state.memory);
+	sexp_list_append(&quoted, reads(I, true), &I->call_root->state.memory);
 	return quoted;
 }
 
@@ -177,7 +178,7 @@ Sexp str_reader_macro(Interpreter *I, char entry_c, const u16 row, const u16 col
 			}
 		}
 	}
-	lps str = lps_from_cstr(buffer_to_cstr_move(string_builder));
+	lps str = lps_from_cstr(buffer_to_cstr_move(string_builder), std_allocator());
 	Sexp result = sexp_new_source_atom(str, row, col);
 	result.word.atom_type = A_STR;
 	return result;
@@ -188,6 +189,11 @@ Sexp str_reader_macro(Interpreter *I, char entry_c, const u16 row, const u16 col
 
 // TODO: hex deserialisation
 Sexp numeral_reader_macro(Interpreter *I, char entry_c, const u16 row, const u16 col) {
+	int next_char = peekc(I);
+	if (entry_c == '-' && !isdigit(next_char)) {
+		unreadc(I, entry_c);
+		return reads(I, false);
+	}
 	Buffer *string_builder = buffer_new();
 	buffer_append_char(string_builder, entry_c);
 	int c;
@@ -292,7 +298,6 @@ Sexp numeral_reader_macro(Interpreter *I, char entry_c, const u16 row, const u16
 	buffer_free(string_builder);
 	return sexp_null();
 }
-
 Sexp comment_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 	// TODO: multi-line comments
 	if (c == ';') {
@@ -300,7 +305,7 @@ Sexp comment_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 			c = readc(I);
 		}
 	}
-	return reads(I);
+	return reads(I, true);
 }
 
 void primitive_reader_macros(Primitives *prims) {

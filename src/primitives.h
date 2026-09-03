@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+// produces the primitive set that is every intrinsic
 Primitives *primitives_default();
 p_macro primitives_get_macro(const Primitives *prims, const lps fn);
 bool primitives_contains_macro(const Primitives *prims, const lps fn);

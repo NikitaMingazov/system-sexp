@@ -1,3 +1,6 @@
+add documentation to primitives in the repl
+wrap primitives with functions
+
 early return is set top of call stack to sexp and unwind once
 ctx has a count of required unmatched ) to
 

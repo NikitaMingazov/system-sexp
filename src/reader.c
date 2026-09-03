@@ -1,5 +1,6 @@
 // lexer and parser are merged because sexps are simple
 #include "reader.h"
+#include "allocators/std-alloc.h"
 #include "include/nob.h"
 #include "readtable.h"
 #include "interpreter.h"
@@ -8,6 +9,7 @@
 #include "buffer.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 // reads a single char (doesn't trigger macros)
 int readc(Interpreter *I) {
@@ -46,12 +48,12 @@ typedef struct {
 } Sexps;
 
 // returns the first sexp found in the context's stream
-Sexp reads(Interpreter *I) {
+Sexp reads(Interpreter *I, bool do_reader_macros) {
 	int c = readc(I);
 	while (c == ' ' || c == '\n') {
 		c = readc(I);
 	}
-	if (readtable_get_macro(I->rt, c)) {
+	if (do_reader_macros && readtable_get_macro(I->rt, c)) {
 		return (*readtable_get_macro(I->rt, c)) (I, c, I->tail_row, I->tail_col);
 	}
 	if (c == EOF) // TODO: send done msg
@@ -77,7 +79,7 @@ Sexp reads(Interpreter *I) {
 			}
 		}
 		Sexp atom = sexp_new_source_atom(
-		               lps_from_chars_with_len(buf->data, buf->len),
+		               lps_from_chars_with_len(buf->data, buf->len, std_allocator()),
 		               open_row,
 		               open_col
 		             );
@@ -92,7 +94,7 @@ Sexp reads(Interpreter *I) {
 	uint child_start_row;
 	uint child_start_col;
 	while ((c = readc(I))) {
-		if (readtable_get_macro(I->rt, c)) {
+		if (do_reader_macros && readtable_get_macro(I->rt, c)) {
 			nob_da_append(&out_list,
 			              (*readtable_get_macro(I->rt, c)) (I, c, I->tail_row, I->tail_col)
 			);
@@ -109,7 +111,7 @@ Sexp reads(Interpreter *I) {
 			case '(':
 				unreadc(I, c);
 				nob_da_append(&out_list,
-			                  reads(I)
+			                  reads(I, true)
 				);
 				break;
 			case ')':
@@ -129,7 +131,7 @@ Sexp reads(Interpreter *I) {
 					}
 				}
 				Sexp atom = sexp_new_source_atom(
-				        lps_from_chars_with_len(buf->data, buf->len),
+				        lps_from_chars_with_len(buf->data, buf->len, std_allocator()),
 				        child_start_row,
 				        child_start_col
 				);
