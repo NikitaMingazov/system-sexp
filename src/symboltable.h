@@ -1,8 +1,8 @@
 #ifndef SYMBOLTABLE_H_
 #define SYMBOLTABLE_H_
 
+#include "allocators/allocator.h"
 #include "include/ht.h"
-#include "include/arena.h"
 #include "sexp.h"
 #include "lps.h"
 
@@ -12,10 +12,10 @@ typedef struct symboltable {
 	inner table;
 } Symboltable;
 
-Symboltable *symboltable_new(Arena *a);
+Symboltable *symboltable_new(Allocator a);
 void symboltable_free(Symboltable *st);
 
-int symboltable_set(Symboltable *st, const lps key, Sexp val, Arena *a);
+int symboltable_set(Symboltable *st, const lps key, Sexp val, Allocator a);
 Sexp symboltable_remove(Symboltable *st, const lps key);
 Sexp symboltable_peek(Symboltable *st, const lps key);
 // mutable reference

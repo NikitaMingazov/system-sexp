@@ -1,8 +1,9 @@
 #include "symboltable.h"
-#include "include/arena.h"
+#include "allocators/allocator.h"
 #include "include/ht.h"
 #include "sexp.h"
 #include "lps.h"
+#include <stdalign.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -20,8 +21,8 @@ static size_t lps_hasheq(Ht_Op op, void const* a_, void const* b_, size_t n)
 	return 0;
 }
 
-Symboltable *symboltable_new(Arena *a) {
-	Symboltable *new = arena_alloc(a, sizeof(*new));
+Symboltable *symboltable_new(Allocator a) {
+	Symboltable *new = a.alloc(a.ctx, sizeof(*new), alignof(typeof(*new)));
 	*new = (Symboltable){
 		(inner){ .hasheq = lps_hasheq }
 	};
@@ -32,7 +33,7 @@ void symboltable_free(Symboltable *st) {
 	ht_free(&st->table);
 }
 
-int symboltable_set(Symboltable *st, const lps key, Sexp val, Arena *a) {
+int symboltable_set(Symboltable *st, const lps key, Sexp val, Allocator a) {
 	(void)a;
 	*ht_put(&st->table, key) = val;
 	return 0;

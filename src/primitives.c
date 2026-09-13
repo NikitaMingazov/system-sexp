@@ -82,7 +82,7 @@ void primitives_unset_macro(Primitives *prims, const lps fn) {
 // they can be reassigned at runtime
 void primitives_export_readers(const Primitives *prims, Readtable *rt) {
 	ht_foreach(value, &prims->char_reader_macros) {
-		readtable_add_macro(rt, ht_key(&prims->char_reader_macros, value), *value);
+		readtable_add_macro(rt, ht_key(&prims->char_reader_macros, /*(Sexp*)*/value), *value);
 	}
 }
 
@@ -98,8 +98,11 @@ void primitives_unset_reader(Primitives *prims, char c) {
 Sexp quote_reader_macro(Interpreter *I, char c, u16 row, u16 col) {
 	Sexp quoted = sexp_new_source_list(row, col);
 	Sexp quote = sexp_new_source_atom(lps_from_cstr("p-quote", std_allocator()), row, col);
-	sexp_list_append(&quoted, quote, &I->call_root->state.memory);
-	sexp_list_append(&quoted, reads(I, true), &I->call_root->state.memory);
+	// sexp_list_append(&quoted, quote, &I->call_root->state.memory);
+	// sexp_list_append(&quoted, reads(I, true), &I->call_root->state.memory);
+	// TODO: fix leak
+	sexp_list_append(&quoted, quote, std_allocator());
+	sexp_list_append(&quoted, reads(I, true), std_allocator());
 	return quoted;
 }
 

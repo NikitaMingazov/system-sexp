@@ -1,7 +1,7 @@
 #ifndef SEXP_H_
 #define SEXP_H_
 
-#include "include/arena.h"
+#include "allocators/allocator.h"
 #include "interpreter_t.h"
 #include "lps.h"
 #include <stdint.h>
@@ -23,6 +23,7 @@ enum atom_type {
 	// Used to represent an invalid sexp (on 0-init)
 	A_NULL = 0,
 	// a symbol is a string tagged by the reader
+	// they equivalent to strings for all primitives
 	A_SYM  = 1,
 	// lps
 	A_STR  = 2,
@@ -76,7 +77,7 @@ typedef struct sexp {
 // for the reader
 Sexp sexp_new_source_atom(lps str, u16 row, u16 col);
 Sexp sexp_new_source_list(u16 row, u16 col);
-// used in primitive macros TODO: move out of sexp
+// used in primitive macros
 Sexp sexp_new_list(CallTree *at);
 Sexp sexp_new_atom(union atom_val val, enum atom_type type, CallTree *at);
 Sexp sexp_new_atom_sym(lps str, CallTree *at);
@@ -100,21 +101,22 @@ lps sexp_read_str(Sexp s);
 // list_reads
 Sexp* sexp_children(Sexp s);
 size_t sexp_num_children(Sexp s);
-void sexp_list_append(Sexp *list, Sexp addition, Arena *a);
+void sexp_list_append(Sexp *list, Sexp addition, Allocator a);
 // create an uninit list with a len
 Sexp sexp_list_reserved(CallTree *at, size_t len);
+// Sexp sexp_list_reserved(CallTree *at, size_t len, Allocator a);
 // returns reference to nth element, or NULL if OOB
 Sexp *sexp_list_nth(Sexp list, size_t n);
 
 bool sexp_is_nil(Sexp s);
 // convert to string
-lps sexp_format(Sexp sexp);
+lps sexp_format(Sexp sexp, Allocator a);
 
 // deep copy of a sexp
-Sexp sexp_dup(Sexp sexp);
+Sexp sexp_dup(Sexp sexp, Allocator a);
 // deep free of a sexp's arrays
 // does not free the ptr atoms
-void sexp_destroy(Sexp sexp);
+void sexp_destroy(Sexp sexp, Allocator a);
 
 // a zeroed sexp to represent internal errors/end of stream/etc.
 Sexp sexp_null();

@@ -4,9 +4,9 @@
 #define NOB_IMPLEMENTATION
 #include "include/nob.h"
 
-#define ARENA_REGION_DEFAULT_CAPACITY (256)
-#define ARENA_IMPLEMENTATION
-#include "include/arena.h"
+#include "allocators/allocator.h"
+#include "allocators/arena-alloc.h"
+#include "allocators/std-alloc.h"
 
 #include "arenapool.h"
 
@@ -16,23 +16,26 @@ ArenaPool arena_pool_new() {
 }
 
 void arena_pool_destroy(ArenaPool *pool) {
+	for (unsigned i = 0; i < pool->total.count; ++i) {
+		arena_allocator_free(&pool->total.items[i]);
+	}
 	nob_da_free(pool->total);
 	nob_da_free(pool->available);
 }
 
-Arena arena_pool_get(ArenaPool *pool) {
+Allocator arena_pool_get(ArenaPool *pool) {
 	// TODO: atomic and spinlock mutex
 	if (pool->available.count > 0) {
 		return nob_da_pop(&pool->available);
 	}
-	nob_da_append(&pool->total, (Arena) {0});
-	Arena a = nob_da_last(&pool->total);
+	nob_da_append(&pool->total, arena_allocator_new(std_allocator()));
+	Allocator a = nob_da_last(&pool->total);
 	return a;
 }
 
-void arena_pool_return(ArenaPool *pool, Arena a) {
+void arena_pool_return(ArenaPool *pool, Allocator a) {
 	// fprintf(stderr, "Released Arena { begin=%p, end=%p }\n", a.begin, a.end);
-	arena_reset(&a);
+	arena_allocator_reset(&a);
 	nob_da_append(&pool->available, a);
 }
 

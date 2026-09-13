@@ -1,6 +1,6 @@
 
+#include "allocators/allocator.h"
 #include "allocators/std-alloc.h"
-#include "include/arena.h"
 
 #include "interpreter.h"
 #include "arenapool.h"
@@ -14,6 +14,7 @@
 #include "readtable.h"
 #include "primitives_t.h"
 #include <pthread.h>
+#include <stdalign.h>
 #include <stddefer.h>
 #include <threads.h>
 #include <setjmp.h>
@@ -37,10 +38,10 @@ StackState stackstate_new(Sexp *to_eval, size_t num_eval_tmps, ArenaPool *pool) 
 	StackState ss = (StackState) {
 		.memory = arena_pool_get(pool),
 		.sexp_called = to_eval,
-		.symboltable = symboltable_new(&ss.memory),
+		.symboltable = symboltable_new(ss.memory),
 		.num_call_results = num_eval_tmps,
 	};
-	ss.call_results = arena_alloc(&ss.memory, num_eval_tmps * sizeof(Sexp));
+	ss.call_results = ss.memory.alloc(ss.memory.ctx, num_eval_tmps * sizeof(Sexp), alignof(Sexp));
 	memset(ss.call_results, 0, num_eval_tmps * sizeof(Sexp));
 	return ss;
 }
@@ -86,9 +87,9 @@ int calltree_set_symbol_val(CallTree *at, const lps sym, Sexp val) {
 	// 	LOG(fprintf(stderr, "shadowed "LPS_Fmt"\n", LPS_Arg(sym)));
 	// parent's lifetime exceeds child
 	if (at->parent)
-		return symboltable_set(at->state.symboltable, sym, val, &at->parent->state.memory);
+		return symboltable_set(at->state.symboltable, sym, val, at->parent->state.memory);
 	else // root has no parent but is permanent
-		return symboltable_set(at->state.symboltable, sym, val, &at->state.memory);
+		return symboltable_set(at->state.symboltable, sym, val, at->state.memory);
 }
 Sexp calltree_remove_symbol_val(CallTree *at, const lps sym) {
 	CallTree *cursor = at;
@@ -116,7 +117,7 @@ Sexp *calltree_get_symbol_val_ref_no_walk(CallTree *at, const lps sym) {
 	return symboltable_get_ref(at->state.symboltable, sym);
 }
 void *calltree_alloc(CallTree *at, size_t size) {
-	return arena_alloc(&at->state.memory, size);
+	return at->state.memory.alloc(at->state.memory.ctx, size, alignof(max_align_t));
 }
 
 Interpreter *interpreter_new(const Primitives *prims, uint num_threads) {
@@ -141,9 +142,9 @@ Interpreter *interpreter_new(const Primitives *prims, uint num_threads) {
 	new->call_root->state = stackstate_new(&new->sexp_root, 0, &new->arenapool);
 	new->call_root->origin_idx = -1; // underflow as a flag
 	// initialise eval to the primitive's default
-	Arena *root_arena = &new->call_root->state.memory;
+	Allocator root_arena = new->call_root->state.memory;
 	Sexp default_eval = sexp_new_source_atom(prims->default_eval_binding, 0, 0);
-	calltree_set_symbol_val(new->call_root, lps_from_cstr("eval", std_allocator()), default_eval);
+	calltree_set_symbol_val(new->call_root, lps_from_cstr("eval", root_arena), default_eval);
 	return new;
 }
 
@@ -171,8 +172,9 @@ Sexp eval(Sexp to_eval, Interpreter *I, CallTree *at) {
 		LOG(fprintf(stderr, "   at "); print_trace(at);)
 	Sexp *with_eval = calltree_alloc(at, sizeof(Sexp));
 	*with_eval = sexp_new_list(at);
-	sexp_list_append(with_eval, sexp_new_atom_sym(LPS_EVAL, at), &at->state.memory);
-	sexp_list_append(with_eval, to_eval, &at->state.memory);
+	// TODO: fix leak
+	sexp_list_append(with_eval, sexp_new_atom_sym(LPS_EVAL, at), at->state.memory);
+	sexp_list_append(with_eval, to_eval, at->state.memory);
 	// 1 is to eval the macro into
 	CallTree *child_call = calltree_child_at(at, with_eval, 1, 0, &I->arenapool);
 	// p_exec can longjmp
@@ -258,7 +260,8 @@ next_job:
 					return NULL;
 				}
 				// append new sexp to root
-				sexp_list_append(&I->sexp_root, next, &I->call_root->state.memory);
+				// TODO: fix leak
+				sexp_list_append(&I->sexp_root, next, I->call_root->state.memory);
 				Sexp *next_alloced = calltree_alloc(I->call_root, sizeof(Sexp));
 				*next_alloced = next;
 				job = calltree_child_at(I->call_root, next_alloced, 1, sexp_num_children(I->sexp_root)-1, &I->arenapool);
@@ -284,17 +287,17 @@ next_job:
 			Sexp result = eval(*calltree_sexp_at(job), I, job);
 			CallTree *call_parent = job->parent;
 			if (call_parent->state.num_call_results > 0)
-				call_parent->state.call_results[job->origin_idx] = sexp_dup(result);
-					LOG(fprintf(stderr, "Destroyed call: ");)
-					LOG(print_trace(job);)
+				call_parent->state.call_results[job->origin_idx] = sexp_dup(result, std_allocator());
+				LOG(fprintf(stderr, "Destroyed call: ");)
+				LOG(print_trace(job);)
 			calltree_destroy(*job, &I->arenapool);
 			// continue execution in the parent that needed the value
 			job = job->parent;
 			if (!job->parent) continue;
 				LOG(fprintf(stderr, "Unwound to: ");)
 				LOG(print_trace(job);)
-			LOG(if (call_parent->state.num_call_results > 0)
-				LOG(fprintf(stderr, "With value "LPS_Fmt"\n", LPS_Arg(sexp_format(result)));))
+				LOG(if (call_parent->state.num_call_results > 0)
+					fprintf(stderr, "With value "LPS_Fmt"\n", LPS_Arg(sexp_format(result)));)
 			interpreter_push_call(I, job, dispatcher_id);
 		}
 	}

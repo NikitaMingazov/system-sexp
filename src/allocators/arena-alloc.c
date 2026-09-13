@@ -1,4 +1,6 @@
 
+#define ARENA_REGION_DEFAULT_CAPACITY (256)
+#define ARENA_IMPLEMENTATION
 #include "arena.h"
 
 #include "arena-alloc.h"

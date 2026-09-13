@@ -1,15 +1,20 @@
+allow setting of eval-symbol
+it evals a symbol or a string
+
+make sym a u16 u8 pair into symbolspace?
+or remove sym and make it just str
+
 dump host preprocessor with:
 gcc -dM -E - < /dev/null
 primitive fns:
-preprocessor-default, errno, getenv
+preprocessor-default, errno
 fprintf and primitives
 
 eval fn spot, a macro is something that evals into macro-body
-redefine eval to handle it differently for a lisp-2
+can redefine eval to handle it differently for a lisp-2
 
 fix memory usage and leaks, then rewrite in C++
-
-make sym a u16 u8 pair
+make failed asserts from stdin sigint (to be caught and sent back to 0 reading)
 
 as root is a progn, (export sym1 sym2) as the last line is equal to
 '((mangle-inner sym1)
@@ -30,5 +35,5 @@ pattern matching on let binds
 
 tailor this for the software side of embedded, with distributed builds, messaging protocols and allocators this would make a legendary portfolio entry for embedded
 
-thread safety; symboltable, arenapool, arena
+thread safety; patch symboltable, arenapool, arena
 with PDA reader macro generalisation, `T, `c etc. can all be separate macros

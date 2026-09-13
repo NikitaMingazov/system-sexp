@@ -1,7 +1,7 @@
 #ifndef INTERPRETER_H_
 #define INTERPRETER_H_
 
-#include "include/arena.h"
+#include "allocators/allocator.h"
 #include "arenapool.h"
 #include "primitives_t.h"
 #include "master_slave_channel.h"
@@ -15,7 +15,7 @@ typedef unsigned int uint;
 
 typedef struct stack_state {
 	// u32 arena_idx;
-	Arena memory;
+	Allocator memory;
 	Symboltable *symboltable;
 	// cached reads of upwards symbols
 	// hashtable<lps, symboltable*> cached_origins
