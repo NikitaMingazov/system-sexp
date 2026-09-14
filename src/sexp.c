@@ -184,13 +184,18 @@ static char *format(const char *fmt, size_t *len, Allocator a, ...) {
 	return buffer;
 }
 
-void sexp_format_into_buffer(const Sexp s, Buffer *buf, Allocator a) {
+static void sexp_format_into_buffer(const Sexp s, Buffer *buf, Allocator a, uint indent) {
 	if (s.is_list) {
 		buffer_append_char(buf, '(');
+		++indent;
 		for (size_t i = 0; i < sexp_num_children(s); ++i) {
-			sexp_format_into_buffer(sexp_children(s)[i], buf, a);
-			if (i+1 < sexp_num_children(s))
-				buffer_append_char(buf, ' ');
+			if (i > 0) {
+				buffer_append_char(buf, '\n');
+				for (size_t j = 0; j < indent; ++j) {
+					buffer_append_char(buf, ' ');
+				}
+			}
+			sexp_format_into_buffer(sexp_children(s)[i], buf, a, indent);
 		}
 		buffer_append_char(buf, ')');
 	} else {
@@ -231,7 +236,7 @@ void sexp_format_into_buffer(const Sexp s, Buffer *buf, Allocator a) {
 lps sexp_format(const Sexp sexp, Allocator a) {
 	Buffer *stringbuilder = buffer_new();
 	// TODO: thread-local scratch arena
-	sexp_format_into_buffer(sexp, stringbuilder, std_allocator());
+	sexp_format_into_buffer(sexp, stringbuilder, std_allocator(), 0);
 	lps new = lps_with_reserved_len(stringbuilder->len, a);
 	memcpy(new, stringbuilder->data, stringbuilder->len);
 	buffer_free(stringbuilder);
