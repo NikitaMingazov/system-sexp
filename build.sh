@@ -19,13 +19,15 @@ cd ../../src
 
 # transpile ctime sources (X.ct defaults to X.c output)
 
+echo "transpiling readtable.ct"
+$ctt readtable.ct || exit
+echo "transpiling main.ct"
+$ctt main.ct || exit
+
 # something broke with libtcc in-memory, so clang is used as fallback (extremely slow :'( )
 # libtcc used to be able to find <stdbool.h>, now it doesn't? I don't get it
-# $ctt readtable.ct || exit
-# $ctt main.ct || exit
-
-$ctt readtable.ct -cc clang -a -O0 -a -Wno-duplicate-decl-specifier || exit
-$ctt main.ct -cc clang -a -O0 || exit
+# $ctt readtable.ct -cc clang -a -O0 -a -Wno-duplicate-decl-specifier || exit
+# $ctt main.ct -cc clang -a -O0 || exit
 
 # export intrinsics into the primitive table
 clang -o scripts/export_intrinsics scripts/export_intrinsics.c

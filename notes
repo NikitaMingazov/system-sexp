@@ -1,12 +1,20 @@
 allow setting of eval-symbol
 it evals a symbol or a string
 
+sexp_format:
+  first arg alignment
+  indent by 2 spaces
+  lists shorter than X chars stay in one line
+  otherwise split on the first arg
+
 make sym a u16 u8 pair into symbolspace?
 or remove sym and make it just str
 
-dump host preprocessor with:
-gcc -dM -E - < /dev/null
-primitive fns:
+expose list of primitives as a primitive, for self-documentation
+expose list of defined symbols
+
+tcc -dM -E - < /dev/null
+todo primitive fns:
 preprocessor-default, errno
 fprintf and primitives
 
